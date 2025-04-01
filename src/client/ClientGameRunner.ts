@@ -36,6 +36,7 @@ import {
 import { createCanvas } from "./Utils";
 import { createRenderer, GameRenderer } from "./graphics/GameRenderer";
 
+export // Is this function needed?
 function distSortUnitWorld(tile: TileRef, game: GameView) {
   return (a: Unit | UnitView, b: Unit | UnitView) => {
     return (
