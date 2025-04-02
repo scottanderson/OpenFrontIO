@@ -15,8 +15,8 @@ declare global {
     adsbygoogle: unknown[];
   }
 }
+
 // Add this at the top of your file
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 declare let adsbygoogle: unknown[];
 
 @customElement("win-modal")
