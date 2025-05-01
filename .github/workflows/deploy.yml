@@ -28,10 +28,10 @@ on:
         default: ""
         type: string
 
-  #  Automatic deployment when pushing to main
+  # Automatic deployment on push
   push:
     branches:
-      - main
+      - "*"
 
 jobs:
   deploy:
@@ -94,7 +94,7 @@ jobs:
           SERVER_HOST_STAGING: ${{ secrets.SERVER_HOST_STAGING }}
           SERVER_HOST_US: ${{ secrets.SERVER_HOST_US }}
           SSH_KEY: ~/.ssh/id_rsa
-          SUBDOMAIN: ${{ inputs.target_subdomain || 'main' }}
+          SUBDOMAIN: ${{ github.event_name == 'push' && github.ref_name || inputs.target_subdomain || 'main' }}
           VERSION_TAG: latest
         run: |
           echo "::group::deploy.sh"
