@@ -44,8 +44,6 @@ jobs:
     environment: ${{ inputs.target_subdomain && format('{0}.{1}', inputs.target_subdomain, inputs.target_domain) || inputs.target_domain || 'openfront.dev' }}
     env:
       DOMAIN: ${{ inputs.target_domain || 'openfront.dev' }}
-      ENV: ${{ inputs.target_domain == 'openfront.io' && 'prod' || 'staging' }}
-      HOST: ${{ github.event_name == 'workflow_dispatch' && inputs.target_host || 'staging' }}
       SUBDOMAIN: ${{ github.event_name == 'push' && github.ref_name || inputs.target_subdomain || 'main' }}
     steps:
       - uses: actions/checkout@v4
@@ -85,11 +83,13 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           DOCKER_REPO: ${{ vars.DOCKERHUB_REPO }}
           DOCKER_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          ENV: ${{ inputs.target_domain == 'openfront.io' && 'prod' || 'staging' }}
+          HOST: ${{ github.event_name == 'workflow_dispatch' && inputs.target_host || 'staging' }}
           MON_PASSWORD: ${{ secrets.MON_PASSWORD }}
           MON_USERNAME: ${{ secrets.MON_USERNAME }}
           OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
-          OTEL_USERNAME: ${{ secrets.OTEL_USERNAME }}
           OTEL_PASSWORD: ${{ secrets.OTEL_PASSWORD }}
+          OTEL_USERNAME: ${{ secrets.OTEL_USERNAME }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
