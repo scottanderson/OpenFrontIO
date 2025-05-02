@@ -36,8 +36,6 @@ on:
 
 jobs:
   deploy:
-    # Don't deploy on push if this is a fork
-    if: ${{ github.event_name == 'workflow_dispatch' || github.repository == 'openfrontio/OpenFrontIO' }}
     # Use different logic based on event type
     name: Deploy to ${{ inputs.target_subdomain && format('{0}.{1}', inputs.target_subdomain, inputs.target_domain) || inputs.target_domain || 'openfront.dev' }}
     runs-on: ubuntu-latest
