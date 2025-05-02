@@ -110,6 +110,20 @@ jobs:
 
           Deployed from $GITHUB_REF to $FQDN
           EOF
+
+      - name: Notify PR 🚀
+        if: ${{ success() && github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for open PR from $GITHUB_HEAD_REF..."
+          pr_url=$(gh pr list --head "$GITHUB_HEAD_REF" --state open --json url -q '.[0].url')
+          if [ -n "$pr_url" ]; then
+            gh pr comment "$pr_url" --body "🚀 Deployment to [$FQDN](https://$FQDN) is live."
+          else
+            echo "No open PR found for branch $GITHUB_HEAD_REF"
+          fi
+
       - name: Update deployment status ❌
         if: failure()
         run: |
