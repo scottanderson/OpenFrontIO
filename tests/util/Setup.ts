@@ -26,7 +26,6 @@ export async function setup(
   const miniGameMap = await genTerrainFromBin(
     String.fromCharCode.apply(null, miniMap),
   );
-  const nationMap = { nations: [] };
 
   // Configure the game
   const serverConfig = new TestServerConfig();
@@ -46,5 +45,5 @@ export async function setup(
   const config = new TestConfig(serverConfig, gameConfig, new UserSettings());
 
   // Create and return the game
-  return createGame([], gameMap, miniGameMap, nationMap, config); // TODO: !!!
+  return createGame([], [], gameMap, miniGameMap, config);
 }

@@ -270,7 +270,7 @@ async function schedulePublicGame(playlist: MapPlaylist) {
     disableNPCs: gameMode == GameMode.Team,
     disableNukes: false,
     gameMode,
-    numPlayerTeams,
+    playerTeams: numPlayerTeams,
     bots: 400,
   };
 
