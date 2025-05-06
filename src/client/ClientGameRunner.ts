@@ -221,6 +221,7 @@ export class ClientGameRunner {
 
   public start() {
     consolex.log("starting client game");
+
     this.isActive = true;
     this.lastMessageTime = Date.now();
     setTimeout(() => {
