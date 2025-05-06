@@ -35,6 +35,11 @@ export class FakeHumanExecution implements Execution {
   private mg: Game;
   private player: Player | null = null;
 
+  private attackRate: number;
+  private attackTick: number;
+  private triggerRatio: number;
+  private reserveRatio: number;
+
   private lastEmojiSent = new Map<Player, Tick>();
   private lastNukeSent: [Tick, TileRef][] = [];
   private embargoMalusApplied = new Set<PlayerID>();
@@ -46,6 +51,10 @@ export class FakeHumanExecution implements Execution {
     this.random = new PseudoRandom(
       simpleHash(playerInfo.id) + simpleHash(gameID),
     );
+    this.attackRate = this.random.nextInt(40, 80);
+    this.attackTick = this.random.nextInt(0, this.attackRate);
+    this.triggerRatio = this.random.nextInt(60, 90) / 100;
+    this.reserveRatio = this.random.nextInt(30, 60) / 100;
   }
 
   init(mg: Game) {
@@ -100,21 +109,21 @@ export class FakeHumanExecution implements Execution {
   }
 
   tick(ticks: number) {
+    if (ticks % this.attackRate != this.attackTick) return;
+
     if (this.mg.inSpawnPhase()) {
-      if (ticks % this.random.nextInt(5, 30) === 0) {
-        const rl = this.randomLand();
-        if (rl === null) {
-          consolex.warn(`cannot spawn ${this.playerInfo.name}`);
-          return;
-        }
-        this.mg.addExecution(new SpawnExecution(this.playerInfo, rl));
+      const rl = this.randomLand();
+      if (rl == null) {
+        consolex.warn(`cannot spawn ${this.playerInfo.name}`);
+        return;
       }
+      this.mg.addExecution(new SpawnExecution(this.playerInfo, rl));
       return;
     }
-    if (this.player === null) {
-      this.player =
-        this.mg.players().find((p) => p.id() === this.playerInfo.id) ?? null;
-      if (this.player === null) {
+
+    if (this.player == null) {
+      this.player = this.mg.players().find((p) => p.id() == this.playerInfo.id);
+      if (this.player == null) {
         return;
       }
     }
@@ -126,16 +135,18 @@ export class FakeHumanExecution implements Execution {
 
     if (this.behavior === null) {
       // Player is unavailable during init()
-      this.behavior = new BotBehavior(this.random, this.mg, this.player, 1 / 5);
+      this.behavior = new BotBehavior(
+        this.random,
+        this.mg,
+        this.player,
+        this.triggerRatio,
+        this.reserveRatio,
+      );
     }
 
     if (this.firstMove) {
       this.firstMove = false;
       this.behavior.sendAttack(this.mg.terraNullius());
-      return;
-    }
-
-    if (ticks % this.random.nextInt(40, 80) != 0) {
       return;
     }
 
@@ -151,7 +162,10 @@ export class FakeHumanExecution implements Execution {
     this.handleEnemies();
     this.handleUnits();
     this.handleEmbargoesToHostileNations();
+    this.maybeAttack();
+  }
 
+  private maybeAttack() {
     const enemyborder = Array.from(this.player.borderTiles())
       .flatMap((t) => this.mg.neighbors(t))
       .filter(
@@ -180,9 +194,9 @@ export class FakeHumanExecution implements Execution {
 
     const enemies = enemiesWithTN
       .filter((o) => o.isPlayer())
-      .map((o) => o as Player)
       .sort((a, b) => a.troops() - b.troops());
 
+    // 5% chance to send a random alliance request
     if (this.random.chance(20)) {
       const toAlly = this.random.randElement(enemies);
       if (this.player.canSendAllianceRequest(toAlly)) {
@@ -218,7 +232,7 @@ export class FakeHumanExecution implements Execution {
     }
   }
 
-  shouldDiscourageAttack(other: Player) {
+  private shouldDiscourageAttack(other: Player) {
     if (other.isTraitor()) {
       return false;
     }
@@ -237,6 +251,8 @@ export class FakeHumanExecution implements Execution {
   }
 
   handleEnemies() {
+    this.behavior.forgetOldEnemies();
+    this.behavior.checkIncomingAttacks();
     this.behavior.assistAllies();
     const enemy = this.behavior.selectEnemy();
     if (!enemy) return;
@@ -267,8 +283,7 @@ export class FakeHumanExecution implements Execution {
     const silos = this.player.units(UnitType.MissileSilo);
     if (
       silos.length == 0 ||
-      this.player.gold() <
-        this.mg.config().unitInfo(UnitType.AtomBomb).cost(this.player) ||
+      this.player.gold() < this.cost(UnitType.AtomBomb) ||
       other.type() == PlayerType.Bot ||
       this.player.isOnSameTeam(other)
     ) {
@@ -410,36 +425,21 @@ export class FakeHumanExecution implements Execution {
       }
       return;
     }
-    this.maybeSpawnStructure(
-      UnitType.City,
-      2,
-      (t) => new ConstructionExecution(player.id(), t, UnitType.City),
-    );
+    this.maybeSpawnStructure(UnitType.City, 2);
     if (this.maybeSpawnWarship()) {
       return;
     }
     if (!this.mg.config().disableNukes()) {
-      this.maybeSpawnStructure(
-        UnitType.MissileSilo,
-        1,
-        (t) => new ConstructionExecution(player.id(), t, UnitType.MissileSilo),
-      );
+      this.maybeSpawnStructure(UnitType.MissileSilo, 1);
     }
   }
 
-  private maybeSpawnStructure(
-    type: UnitType,
-    maxNum: number,
-    build: (tile: TileRef) => Execution,
-  ) {
-    if (this.player === null) throw new Error("not initialized");
+  private maybeSpawnStructure(type: UnitType, maxNum: number) {
     const units = this.player.units(type);
     if (units.length >= maxNum) {
       return;
     }
-    if (
-      this.player.gold() < this.mg.config().unitInfo(type).cost(this.player)
-    ) {
+    if (this.player.gold() < this.cost(type)) {
       return;
     }
     const tile = this.randTerritoryTile(this.player);
@@ -450,7 +450,9 @@ export class FakeHumanExecution implements Execution {
     if (canBuild === false) {
       return;
     }
-    this.mg.addExecution(build(tile));
+    this.mg.addExecution(
+      new ConstructionExecution(this.player.id(), tile, type),
+    );
   }
 
   private maybeSpawnWarship(): boolean {
