@@ -95,6 +95,9 @@ export class GameServer {
     if (typeof gameConfig.gameMode !== "undefined") {
       this.gameConfig.gameMode = gameConfig.gameMode;
     }
+    if (gameConfig.numPlayerTeams != null) {
+      this.gameConfig.numPlayerTeams = gameConfig.numPlayerTeams;
+    }
   }
 
   public addClient(client: Client, lastTurn: number) {
