@@ -279,7 +279,11 @@ export class GameMapImpl implements GameMap {
   ): Set<TileRef> {
     const seen = new Set<TileRef>();
     const q: TileRef[] = [];
-    q.push(tile);
+    if (filter(this, tile)) {
+      seen.add(tile);
+      q.push(tile);
+    }
+
     while (q.length > 0) {
       const curr = q.pop();
       if (typeof curr === "undefined") continue;
