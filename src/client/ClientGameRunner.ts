@@ -365,8 +365,13 @@ export class ClientGameRunner {
       this.myPlayer = myPlayer;
     }
     this.myPlayer.actions(tile).then((actions) => {
-      console.log(`got actions: ${JSON.stringify(actions)}`);
-      if (this.myPlayer === null) return;
+      const bu = actions.buildableUnits.find(
+        (bu) => bu.type == UnitType.TransportShip,
+      );
+      if (bu == null) {
+        console.warn(`no transport ship buildable units`);
+        return;
+      }
       if (actions.canAttack) {
         this.eventBus.emit(
           new SendAttackIntentEvent(
@@ -375,8 +380,8 @@ export class ClientGameRunner {
           ),
         );
       } else if (
-        actions.canBoat !== false &&
-        this.shouldBoat(tile, actions.canBoat) &&
+        bu.canBuild !== false &&
+        this.shouldBoat(tile, bu.canBuild) &&
         this.gameView.isLand(tile)
       ) {
         this.eventBus.emit(

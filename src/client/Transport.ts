@@ -67,9 +67,10 @@ export class SendAttackIntentEvent implements GameEvent {
 
 export class SendBoatAttackIntentEvent implements GameEvent {
   constructor(
-    public readonly targetID: PlayerID | null,
-    public readonly cell: Cell,
+    public readonly targetID: PlayerID,
+    public readonly dst: Cell,
     public readonly troops: number,
+    public readonly src: Cell | null = null,
   ) {}
 }
 
@@ -421,8 +422,10 @@ export class Transport {
       clientID: this.lobbyConfig.clientID,
       targetID: event.targetID,
       troops: event.troops,
-      x: event.cell.x,
-      y: event.cell.y,
+      dstX: event.dst.x,
+      dstY: event.dst.y,
+      srcX: event.src?.x,
+      srcY: event.src?.y,
     });
   }
 
