@@ -91,6 +91,11 @@ export class PublicLobby extends LitElement {
     const seconds = timeRemaining % 60;
     const timeDisplay = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
+    const teamCount =
+      lobby.gameConfig.gameMode === GameMode.Team
+        ? lobby.gameConfig.playerTeams || 0
+        : null;
+
     return html`
       <button
         @click=${() => this.lobbyClicked(lobby)}
@@ -127,6 +132,13 @@ export class PublicLobby extends LitElement {
                   ? translateText("game_mode.teams")
                   : translateText("game_mode.ffa")}
               </div>
+              ${teamCount !== null
+                ? html`
+                    <div class="text-md font-medium text-blue-100">
+                      ${translateText("public_lobby.teams")} ${teamCount}
+                    </div>
+                  `
+                : null}
             </div>
             <div class="flex flex-col items-center">
               <div class="text-md font-medium text-blue-100 mb-2">
