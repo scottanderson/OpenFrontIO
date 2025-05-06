@@ -208,14 +208,23 @@ export class UnitLayer implements Layer {
     this.canvas.height = this.game.height();
     this.transportShipTrailCanvas.width = this.game.width();
     this.transportShipTrailCanvas.height = this.game.height();
-
-    const updates = this.game.updatesSinceLastTick();
-    const unitUpdates = updates?.[GameUpdateType.Unit] ?? [];
-    for (const u of unitUpdates) {
-      const unit = this.game.unit(u.id);
-      if (typeof unit === "undefined") continue;
-      this.onUnitEvent(unit);
-    }
+    this.game
+      ?.updatesSinceLastTick()
+      ?.[GameUpdateType.Unit]?.forEach((unit) => {
+        this.onUnitEvent(this.game.unit(unit.id));
+      });
+    this.boatToTrail.forEach((trail, unit) => {
+      for (const t of trail) {
+        this.paintCell(
+          this.game.x(t),
+          this.game.y(t),
+          this.relationship(unit),
+          this.theme.territoryColor(unit.owner()),
+          150,
+          this.transportShipTrailContext,
+        );
+      }
+    });
   }
 
   private relationship(unit: UnitView): Relationship {
@@ -378,8 +387,6 @@ export class UnitLayer implements Layer {
   }
 
   private handleTradeShipEvent(unit: UnitView) {
-    const rel = this.relationship(unit);
-
     // Clear previous area
     for (const t of this.game.bfs(
       unit.lastTile(),
