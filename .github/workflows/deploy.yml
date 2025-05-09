@@ -39,9 +39,6 @@ on:
     branches:
       - main
 
-permissions:
-  deployments: write
-
 jobs:
   deploy:
     # Don't deploy on push if this is a fork
@@ -55,7 +52,6 @@ jobs:
       || inputs.target_domain
       || 'openfront.dev'
       }}
-    runs-on: ubuntu-latest
     environment: ${{
       github.event_name == 'push'
       && (github.ref_name == 'main' && 'openfront.dev'
@@ -64,6 +60,9 @@ jobs:
       || inputs.target_domain
       || 'openfront.dev'
       }}
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write
     env:
       DOMAIN: ${{ inputs.target_domain || 'openfront.dev' }}
       SUBDOMAIN: ${{ github.event_name == 'push' && github.ref_name || inputs.target_subdomain || 'main' }}
