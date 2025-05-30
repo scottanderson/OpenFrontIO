@@ -41,7 +41,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  log-inputs:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          DOMAIN: ${{ inputs.target_domain }}
+          HOST: ${{ inputs.target_host }}
+          SUBDOMAIN: ${{ inputs.target_subdomain }}
+        run: |
+          echo "### Workflow Inputs" >> $GITHUB_STEP_SUMMARY
+          echo "- target_domain: `${DOMAIN}`" >> $GITHUB_STEP_SUMMARY
+          echo "- target_host: `${HOST}`" >> $GITHUB_STEP_SUMMARY
+          echo "- target_subdomain: `${SUBDOMAIN}`" >> $GITHUB_STEP_SUMMARY
+
   deploy:
+    needs: log-inputs
     # Don't deploy on push if this is a fork
     if: ${{ github.event_name == 'workflow_dispatch' || github.repository == 'openfrontio/OpenFrontIO' }}
     # Use different logic based on event type
