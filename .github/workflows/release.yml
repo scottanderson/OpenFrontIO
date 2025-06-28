@@ -12,6 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: staging
     steps:
       - name: 🖨 Print release info
         env:
@@ -39,12 +40,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [build]
-    environment: prod
+    environment: staging
     steps:
       - env:
           VERSION_TAG: ${{ github.event.release.tag_name }}
         run: |
-          ./deploy.sh prod nbg1 "${VERSION_TAG}" alpha
+          ./deploy.sh staging staging "${VERSION_TAG}" alpha
   deploy-beta:
     runs-on: ubuntu-latest
     needs: [deploy-alpha]
