@@ -26,7 +26,7 @@ export async function archive(gameRecord: GameRecord) {
   try {
     gameRecord.gitCommit = config.gitCommit();
     // Archive to R2
-    return archiveAnalyticsToR2(stripTurns(gameRecord));
+    await archiveAnalyticsToR2(stripTurns(gameRecord));
 
     // Archive full game if there are turns
     if (gameRecord.turns.length > 0) {
