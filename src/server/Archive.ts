@@ -131,7 +131,11 @@ export async function readGameRecord(
       Key: `${gameFolder}/${gameId}`, // Fixed - needed to include gameFolder
     });
     // Parse the response body
-    if (response.Body === undefined) return null;
+    if (response.Body === undefined) {
+      log.warn(`${gameId}: Received empty response from R2`);
+      return readGameRecordFallback(gameId);
+    }
+
     const bodyContents = await response.Body.transformToString();
     return JSON.parse(bodyContents) as GameRecord;
   } catch (error: unknown) {
