@@ -205,6 +205,9 @@ export abstract class DefaultServerConfig implements ServerConfig {
   workerPortByIndex(index: number): number {
     return 3001 + index;
   }
+  replayFallbackUrl(gameId: GameID): string {
+    return `https://api.openfront.io/game/${gameId}`;
+  }
 }
 
 export class DefaultConfig implements Config {

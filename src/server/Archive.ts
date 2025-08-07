@@ -140,18 +140,62 @@ export async function readGameRecord(
       log.error(
         `${gameId}: Error reading game record from R2. Non-Error type: ${String(error)}`,
       );
+    } else {
+      const { message, stack, name } = error;
+      // Log the error for monitoring purposes
+      log.error(`${gameId}: Error reading game record from R2: ${error}`, {
+        message: message,
+        stack: stack,
+        name: name,
+        ...(error && typeof error === "object" ? error : {}),
+      });
+    }
+    return readGameRecordFallback(gameId);
+  }
+}
+
+export async function readGameRecordFallback(
+  gameId: GameID,
+): Promise<GameRecord | null> {
+  try {
+    const response = await fetch(config.replayFallbackUrl(gameId), {
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Http error: non-successful http status ${response.status}`,
+      );
+    }
+
+    const contentType = response.headers.get("Content-Type")?.split(";")?.[0];
+    if (contentType !== "application/json") {
+      throw new Error(
+        `Http error: unexpected content type "${response.headers.get("Content-Type")}"`,
+      );
+    }
+
+    return await response.json();
+  } catch (error: unknown) {
+    // If the error is not an instance of Error, log it as a string
+    if (!(error instanceof Error)) {
+      log.error(
+        `${gameId}: Error reading game record from public api. Non-Error type: ${String(error)}`,
+      );
       return null;
     }
     const { message, stack, name } = error;
-    // Log the error for monitoring purposes
-    log.error(`${gameId}: Error reading game record from R2: ${error}`, {
-      message: message,
-      stack: stack,
-      name: name,
-      ...(error && typeof error === "object" ? error : {}),
-    });
-
-    // Return null instead of throwing the error
+    log.error(
+      `${gameId}: Error reading game record from public api: ${error}`,
+      {
+        message: message,
+        stack: stack,
+        name: name,
+        ...(error && typeof error === "object" ? error : {}),
+      },
+    );
     return null;
   }
 }
