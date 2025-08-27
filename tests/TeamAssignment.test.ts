@@ -7,7 +7,6 @@ describe("assignTeams", () => {
   const createPlayer = (id: string, clan?: string): PlayerInfo => {
     const name = clan ? `[${clan}]Player ${id}` : `Player ${id}`;
     return new PlayerInfo(
-      "🏳️", // flag
       name,
       PlayerType.Human,
       null, // clientID (null for testing)
@@ -84,7 +83,7 @@ describe("assignTeams", () => {
     expect(result.get(players[1])).toEqual(ColoredTeams.Red);
     expect(result.get(players[2])).toEqual(ColoredTeams.Red);
 
-    expect(result.get(players[3])).toEqual("kicked");
+    expect(result.get(players[3])).toBe("kicked");
 
     expect(result.get(players[4])).toEqual(ColoredTeams.Blue);
     expect(result.get(players[5])).toEqual(ColoredTeams.Blue);
@@ -152,7 +151,7 @@ describe("assignTeams", () => {
 
     expect(result.get(players[0])).toEqual(ColoredTeams.Red);
     expect(result.get(players[1])).toEqual(ColoredTeams.Red);
-    expect(result.get(players[2])).toEqual("kicked");
+    expect(result.get(players[2])).toBe("kicked");
     expect(result.get(players[3])).toEqual(ColoredTeams.Blue);
     expect(result.get(players[4])).toEqual(ColoredTeams.Blue);
     expect(result.get(players[5])).toEqual(ColoredTeams.Yellow);

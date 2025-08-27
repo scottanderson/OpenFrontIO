@@ -1,13 +1,13 @@
 import { Execution, Game, Gold, Player, PlayerID } from "../game/Game";
 
 export class DonateGoldExecution implements Execution {
-  private recipient: Player;
+  private recipient: Player | undefined;
 
   private active = true;
 
   constructor(
-    private sender: Player,
-    private recipientID: PlayerID,
+    private readonly sender: Player,
+    private readonly recipientID: PlayerID,
     private gold: Gold | null,
   ) {}
 
@@ -19,15 +19,14 @@ export class DonateGoldExecution implements Execution {
     }
 
     this.recipient = mg.player(this.recipientID);
-    if (this.gold === null) {
-      this.gold = this.sender.gold() / 3n;
-    }
+    this.gold ??= this.sender.gold() / 3n;
   }
 
   tick(ticks: number): void {
-    if (this.gold === null) throw new Error("not initialized");
+    if (this.gold === null) throw new Error("Not initialized");
+    if (this.recipient === undefined) throw new Error("Not initialized");
     if (
-      this.sender.canDonate(this.recipient) &&
+      this.sender.canDonateGold(this.recipient) &&
       this.sender.donateGold(this.recipient, this.gold)
     ) {
       this.recipient.updateRelation(this.sender, 50);

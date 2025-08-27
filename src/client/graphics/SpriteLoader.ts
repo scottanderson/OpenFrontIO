@@ -1,16 +1,28 @@
+import { TrainType, UnitType } from "../../core/game/Game";
 import { Colord } from "colord";
+import { Theme } from "../../core/configuration/Config";
+import { UnitView } from "../../core/game/GameView";
 import atomBombSprite from "../../../resources/sprites/atombomb.png";
 import hydrogenBombSprite from "../../../resources/sprites/hydrogenbomb.png";
 import mirvSprite from "../../../resources/sprites/mirv2.png";
 import samMissileSprite from "../../../resources/sprites/samMissile.png";
 import tradeShipSprite from "../../../resources/sprites/tradeship.png";
+import trainCarriageSprite from "../../../resources/sprites/trainCarriage.png";
+import trainEngineSprite from "../../../resources/sprites/trainEngine.png";
+import trainLoadedCarriageSprite from "../../../resources/sprites/trainCarriageLoaded.png";
 import transportShipSprite from "../../../resources/sprites/transportship.png";
 import warshipSprite from "../../../resources/sprites/warship.png";
-import { Theme } from "../../core/configuration/Config";
-import { UnitType } from "../../core/game/Game";
-import { UnitView } from "../../core/game/GameView";
 
-const SPRITE_CONFIG: Partial<Record<UnitType, string>> = {
+// Can't reuse TrainType because "loaded" is not a type, just an attribute
+const TrainTypeSprite = {
+  Engine: "Engine",
+  Carriage: "Carriage",
+  LoadedCarriage: "LoadedCarriage",
+} as const;
+
+type TrainTypeSprite = (typeof TrainTypeSprite)[keyof typeof TrainTypeSprite];
+
+const SPRITE_CONFIG: Partial<Record<UnitType | TrainTypeSprite, string>> = {
   [UnitType.TransportShip]: transportShipSprite,
   [UnitType.Warship]: warshipSprite,
   [UnitType.SAMMissile]: samMissileSprite,
@@ -18,9 +30,12 @@ const SPRITE_CONFIG: Partial<Record<UnitType, string>> = {
   [UnitType.HydrogenBomb]: hydrogenBombSprite,
   [UnitType.TradeShip]: tradeShipSprite,
   [UnitType.MIRV]: mirvSprite,
+  [TrainTypeSprite.Engine]: trainEngineSprite,
+  [TrainTypeSprite.Carriage]: trainCarriageSprite,
+  [TrainTypeSprite.LoadedCarriage]: trainLoadedCarriageSprite,
 };
 
-const spriteMap: Map<UnitType, ImageBitmap> = new Map();
+const spriteMap: Map<UnitType | TrainTypeSprite, ImageBitmap> = new Map();
 
 // preload all images
 export const loadAllSprites = async (): Promise<void> => {
@@ -30,7 +45,7 @@ export const loadAllSprites = async (): Promise<void> => {
 
   await Promise.all(
     entries.map(async ([unitType, url]) => {
-      const typedUnitType = unitType as UnitType;
+      const typedUnitType = unitType as UnitType | TrainTypeSprite;
 
       if (!url || url === "") {
         console.warn(`No sprite URL for ${typedUnitType}, skipping...`);
@@ -61,11 +76,32 @@ export const loadAllSprites = async (): Promise<void> => {
   );
 };
 
-const getSpriteForUnit = (unitType: UnitType): ImageBitmap | null => {
+/**
+ * The train sprites rely on the train attributes and not only on its type
+ */
+function trainTypeToSpriteType(unit: UnitView): TrainTypeSprite {
+  return unit.trainType() === TrainType.Engine
+    ? TrainTypeSprite.Engine
+    : unit.isLoaded()
+      ? TrainTypeSprite.LoadedCarriage
+      : TrainTypeSprite.Carriage;
+}
+
+const getSpriteForUnit = (unit: UnitView): ImageBitmap | null => {
+  const unitType = unit.type();
+  if (unitType === UnitType.Train) {
+    const trainType = trainTypeToSpriteType(unit);
+    return spriteMap.get(trainType) ?? null;
+  }
   return spriteMap.get(unitType) ?? null;
 };
 
-export const isSpriteReady = (unitType: UnitType): boolean => {
+export const isSpriteReady = (unit: UnitView): boolean => {
+  const unitType = unit.type();
+  if (unitType === UnitType.Train) {
+    const trainType = trainTypeToSpriteType(unit);
+    return spriteMap.has(trainType);
+  }
   return spriteMap.has(unitType);
 };
 
@@ -84,11 +120,12 @@ export const colorizeCanvas = (
   canvas.width = source.width;
   canvas.height = source.height;
 
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D context not supported");
   ctx.drawImage(source, 0, 0);
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
+  const { data } = imageData;
 
   const colorARgb = colorA.toRgb();
   const colorBRgb = colorB.toRgb();
@@ -118,6 +155,17 @@ export const colorizeCanvas = (
   return canvas;
 };
 
+function computeSpriteKey(
+  unit: UnitView,
+  territoryColor: Colord,
+  borderColor: Colord,
+): string {
+  const owner = unit.owner();
+  const type = `${unit.type()}-${unit.trainType()}-${unit.isLoaded()}`;
+  const key = `${type}-${owner.id()}-${territoryColor.toRgbString()}-${borderColor.toRgbString()}`;
+  return key;
+}
+
 export const getColoredSprite = (
   unit: UnitView,
   theme: Theme,
@@ -129,13 +177,11 @@ export const getColoredSprite = (
     customTerritoryColor ?? theme.territoryColor(owner);
   const borderColor: Colord = customBorderColor ?? theme.borderColor(owner);
   const spawnHighlightColor = theme.spawnHighlightColor();
-  const key = `${unit.type()}-${owner.id()}-${territoryColor.toRgbString()}-${borderColor.toRgbString()}`;
+  const key = computeSpriteKey(unit, territoryColor, borderColor);
+  const cached = coloredSpriteCache.get(key);
+  if (cached !== undefined) return cached;
 
-  if (coloredSpriteCache.has(key)) {
-    return coloredSpriteCache.get(key)!;
-  }
-
-  const sprite = getSpriteForUnit(unit.type());
+  const sprite = getSpriteForUnit(unit);
   if (sprite === null) {
     throw new Error(`Failed to load sprite for ${unit.type()}`);
   }

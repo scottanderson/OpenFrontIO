@@ -1,32 +1,34 @@
-import { EventBus } from "../../core/EventBus";
-import { Cell } from "../../core/game/Game";
-import { GameView } from "../../core/game/GameView";
 import { CenterCameraEvent, DragEvent, ZoomEvent } from "../InputHandler";
 import {
   GoToPlayerEvent,
   GoToPositionEvent,
   GoToUnitEvent,
 } from "./layers/Leaderboard";
+import { Cell } from "../../core/game/Game";
+import { EventBus } from "../../core/EventBus";
+import { GameView } from "../../core/game/GameView";
 
 export const GOTO_INTERVAL_MS = 16;
 export const CAMERA_MAX_SPEED = 15;
 export const CAMERA_SMOOTHING = 0.03;
 
 export class TransformHandler {
-  public scale: number = 1.8;
-  private offsetX: number = -350;
-  private offsetY: number = -200;
+  public scale = 1.8;
+  private _boundingRect: DOMRect;
+  private offsetX = -350;
+  private offsetY = -200;
   private lastGoToCallTime: number | null = null;
 
-  private target: Cell | null;
-  private intervalID: NodeJS.Timeout | null = null;
+  private target: Cell | null = null;
+  private intervalID: ReturnType<typeof setTimeout> | null = null;
   private changed = false;
 
   constructor(
-    private game: GameView,
-    private eventBus: EventBus,
-    private canvas: HTMLCanvasElement,
+    private readonly game: GameView,
+    private readonly eventBus: EventBus,
+    private readonly canvas: HTMLCanvasElement,
   ) {
+    this._boundingRect = this.canvas.getBoundingClientRect();
     this.eventBus.on(ZoomEvent, (e) => this.onZoom(e));
     this.eventBus.on(DragEvent, (e) => this.onMove(e));
     this.eventBus.on(GoToPlayerEvent, (e) => this.onGoToPlayer(e));
@@ -35,8 +37,12 @@ export class TransformHandler {
     this.eventBus.on(CenterCameraEvent, () => this.centerCamera());
   }
 
+  public updateCanvasBoundingRect() {
+    this._boundingRect = this.canvas.getBoundingClientRect();
+  }
+
   boundingRect(): DOMRect {
-    return this.canvas.getBoundingClientRect();
+    return this._boundingRect;
   }
 
   width(): number {
@@ -44,6 +50,9 @@ export class TransformHandler {
   }
   hasChanged(): boolean {
     return this.changed;
+  }
+  resetChanged() {
+    this.changed = false;
   }
 
   handleTransform(context: CanvasRenderingContext2D) {
@@ -59,7 +68,6 @@ export class TransformHandler {
       this.game.width() / 2 - this.offsetX * this.scale,
       this.game.height() / 2 - this.offsetY * this.scale,
     );
-    this.changed = false;
   }
 
   worldToScreenCoordinates(cell: Cell): { x: number; y: number } {
@@ -152,10 +160,11 @@ export class TransformHandler {
   onGoToPlayer(event: GoToPlayerEvent) {
     this.game.setFocusedPlayer(event.player);
     this.clearTarget();
-    this.target = new Cell(
-      event.player.nameLocation().x,
-      event.player.nameLocation().y,
-    );
+    const nameLocation = event.player.nameLocation();
+    if (!nameLocation) {
+      return;
+    }
+    this.target = new Cell(nameLocation.x, nameLocation.y);
     this.intervalID = setInterval(() => this.goTo(), GOTO_INTERVAL_MS);
   }
 
@@ -258,7 +267,7 @@ export class TransformHandler {
     this.target = null;
   }
 
-  override(x: number = 0, y: number = 0, s: number = 1) {
+  override(x = 0, y = 0, s = 1) {
     //hardset view position
     this.clearTarget();
     this.offsetX = x;
@@ -267,7 +276,7 @@ export class TransformHandler {
     this.changed = true;
   }
 
-  centerAll(fit: number = 1) {
+  centerAll(fit = 1) {
     //position entire map centered on the screen
 
     const vpWidth = this.boundingRect().width;

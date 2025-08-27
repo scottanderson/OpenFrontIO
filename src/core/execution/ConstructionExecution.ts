@@ -7,37 +7,53 @@ import {
   Unit,
   UnitType,
 } from "../game/Game";
-import { TileRef } from "../game/GameMap";
 import { CityExecution } from "./CityExecution";
 import { DefensePostExecution } from "./DefensePostExecution";
+import { FactoryExecution } from "./FactoryExecution";
 import { MirvExecution } from "./MIRVExecution";
 import { MissileSiloExecution } from "./MissileSiloExecution";
 import { NukeExecution } from "./NukeExecution";
 import { PortExecution } from "./PortExecution";
 import { SAMLauncherExecution } from "./SAMLauncherExecution";
+import { TileRef } from "../game/GameMap";
 import { WarshipExecution } from "./WarshipExecution";
 
 export class ConstructionExecution implements Execution {
   private construction: Unit | null = null;
-  private active: boolean = true;
-  private mg: Game;
+  private active = true;
+  private mg: Game | undefined;
 
-  private ticksUntilComplete: Tick;
+  private ticksUntilComplete: Tick | undefined;
 
-  private cost: Gold;
+  private cost: Gold | undefined;
 
   constructor(
     private player: Player,
-    private tile: TileRef,
-    private constructionType: UnitType,
+    private readonly constructionType: UnitType,
+    private readonly tile: TileRef,
   ) {}
 
   init(mg: Game, ticks: number): void {
     this.mg = mg;
+
+    if (this.mg.config().isUnitDisabled(this.constructionType)) {
+      console.warn(
+        `cannot build construction ${this.constructionType} because it is disabled`,
+      );
+      this.active = false;
+      return;
+    }
+
+    if (!this.mg.isValidRef(this.tile)) {
+      console.warn(`cannot build construction invalid tile ${this.tile}`);
+      this.active = false;
+      return;
+    }
   }
 
   tick(ticks: number): void {
     if (this.construction === null) {
+      if (this.mg === undefined) throw new Error("Not initialized");
       const info = this.mg.unitInfo(this.constructionType);
       if (info.constructionDuration === undefined) {
         this.completeConstruction();
@@ -75,16 +91,19 @@ export class ConstructionExecution implements Execution {
       this.player = this.construction.owner();
       this.construction.delete(false);
       // refund the cost so player has the gold to build the unit
+      if (this.cost === undefined) throw new Error("Not initialized");
       this.player.addGold(this.cost);
       this.completeConstruction();
       this.active = false;
       return;
     }
+    if (this.ticksUntilComplete === undefined) throw new Error("Not initialized");
     this.ticksUntilComplete--;
   }
 
   private completeConstruction() {
-    const player = this.player;
+    if (this.mg === undefined) throw new Error("Not initialized");
+    const { player } = this;
     switch (this.constructionType) {
       case UnitType.AtomBomb:
       case UnitType.HydrogenBomb:
@@ -115,8 +134,14 @@ export class ConstructionExecution implements Execution {
       case UnitType.City:
         this.mg.addExecution(new CityExecution(player, this.tile));
         break;
+      case UnitType.Factory:
+        this.mg.addExecution(new FactoryExecution(player, this.tile));
+        break;
       default:
-        throw Error(`unit type ${this.constructionType} not supported`);
+        console.warn(
+          `unit type ${this.constructionType} cannot be constructed`,
+        );
+        break;
     }
   }
 

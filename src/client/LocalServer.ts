@@ -1,29 +1,33 @@
 import {
   AllPlayersStats,
   ClientMessage,
-  ClientMessageSchema,
   ClientSendWinnerMessage,
   GameRecordSchema,
   Intent,
   PlayerRecord,
   ServerMessage,
-  ServerStartGameMessageSchema,
+  ServerStartGameMessage,
   Turn,
 } from "../core/Schemas";
 import { createGameRecord, decompressGameRecord, replacer } from "../core/Util";
+import { EventBus } from "../core/EventBus";
 import { LobbyConfig } from "./ClientGameRunner";
+import { ReplaySpeedChangeEvent } from "./InputHandler";
+import { defaultReplaySpeedMultiplier } from "./utilities/ReplaySpeedMultiplier";
 import { getPersistentID } from "./Main";
+import { z } from "zod";
 
 export class LocalServer {
   // All turns from the game record on replay.
   private replayTurns: Turn[] = [];
 
-  private turns: Turn[] = [];
+  private readonly turns: Turn[] = [];
 
   private intents: Intent[] = [];
-  private startedAt: number;
+  private startedAt = 0;
 
   private paused = false;
+  private replaySpeedMultiplier = defaultReplaySpeedMultiplier;
 
   private winner: ClientSendWinnerMessage | null = null;
   private allPlayersStats: AllPlayersStats = {};
@@ -31,29 +35,35 @@ export class LocalServer {
   private turnsExecuted = 0;
   private turnStartTime = 0;
 
-  private turnCheckInterval: NodeJS.Timeout;
+  private turnCheckInterval: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
-    private lobbyConfig: LobbyConfig,
-    private clientConnect: () => void,
-    private clientMessage: (message: ServerMessage) => void,
-    private isReplay: boolean,
+    private readonly lobbyConfig: LobbyConfig,
+    private readonly clientConnect: () => void,
+    private readonly clientMessage: (message: ServerMessage) => void,
+    private readonly isReplay: boolean,
+    private readonly eventBus: EventBus,
   ) {}
 
   start() {
     this.turnCheckInterval = setInterval(() => {
-      if (this.turnsExecuted === this.turns.length) {
-        if (
-          this.isReplay ||
-          Date.now() >
-            this.turnStartTime + this.lobbyConfig.serverConfig.turnIntervalMs()
-        ) {
-          this.turnStartTime = Date.now();
-          // End turn on the server means the client will start processing the turn.
-          this.endTurn();
-        }
+      const turnIntervalMs =
+        this.lobbyConfig.serverConfig.turnIntervalMs() *
+        this.replaySpeedMultiplier;
+
+      if (
+        this.turnsExecuted === this.turns.length &&
+        Date.now() > this.turnStartTime + turnIntervalMs
+      ) {
+        this.turnStartTime = Date.now();
+        // End turn on the server means the client will start processing the turn.
+        this.endTurn();
       }
     }, 5);
+
+    this.eventBus.on(ReplaySpeedChangeEvent, (event) => {
+      this.replaySpeedMultiplier = event.replaySpeedMultiplier;
+    });
 
     this.startedAt = Date.now();
     this.clientConnect();
@@ -65,14 +75,11 @@ export class LocalServer {
     if (this.lobbyConfig.gameStartInfo === undefined) {
       throw new Error("missing gameStartInfo");
     }
-    this.clientMessage(
-      ServerStartGameMessageSchema.parse({
-        type: "start",
-        gameID: this.lobbyConfig.gameStartInfo.gameID,
-        gameStartInfo: this.lobbyConfig.gameStartInfo,
-        turns: [],
-      }),
-    );
+    this.clientMessage({
+      type: "start",
+      gameStartInfo: this.lobbyConfig.gameStartInfo,
+      turns: [],
+    } satisfies ServerStartGameMessage);
   }
 
   pause() {
@@ -83,21 +90,13 @@ export class LocalServer {
     this.paused = false;
   }
 
-  onMessage(message: string) {
-    const clientMsg: ClientMessage = ClientMessageSchema.parse(
-      JSON.parse(message),
-    );
+  onMessage(clientMsg: ClientMessage) {
     if (clientMsg.type === "intent") {
       if (this.lobbyConfig.gameRecord) {
         // If we are replaying a game, we don't want to process intents
         return;
       }
       if (this.paused) {
-        if (clientMsg.intent.type === "troop_ratio") {
-          // Store troop change events because otherwise they are
-          // not registered when game is paused.
-          this.intents.push(clientMsg.intent);
-        }
         return;
       }
       this.intents.push(clientMsg.intent);
@@ -118,7 +117,10 @@ export class LocalServer {
       }
       if (archivedHash !== clientMsg.hash) {
         console.error(
-          `desync detected on turn ${clientMsg.turnNumber}, client hash: ${clientMsg.hash}, server hash: ${archivedHash}`,
+          `desync detected on turn ${
+            clientMsg.turnNumber}, client hash: ${
+            clientMsg.hash}, server hash: ${
+            archivedHash}`,
         );
         this.clientMessage({
           type: "desync",
@@ -170,7 +172,7 @@ export class LocalServer {
     });
   }
 
-  public endGame(saveFullGame: boolean = false) {
+  public endGame(saveFullGame = false) {
     console.log("local server ending game");
     clearInterval(this.turnCheckInterval);
     if (this.isReplay) {
@@ -195,18 +197,22 @@ export class LocalServer {
       this.startedAt,
       Date.now(),
       this.winner?.winner,
+      this.lobbyConfig.serverConfig,
     );
     if (!saveFullGame) {
       // Clear turns because beacon only supports up to 64kb
       record.turns = [];
     }
     // For unload events, sendBeacon is the only reliable method
-    const blob = new Blob(
-      [JSON.stringify(GameRecordSchema.parse(record), replacer)],
-      {
-        type: "application/json",
-      },
-    );
+    const result = GameRecordSchema.safeParse(record);
+    if (!result.success) {
+      const error = z.prettifyError(result.error);
+      console.error("Error parsing game record", error);
+      return;
+    }
+    const blob = new Blob([JSON.stringify(result.data, replacer)], {
+      type: "application/json",
+    });
     const workerPath = this.lobbyConfig.serverConfig.workerPath(
       this.lobbyConfig.gameStartInfo.gameID,
     );

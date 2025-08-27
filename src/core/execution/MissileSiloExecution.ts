@@ -3,12 +3,12 @@ import { TileRef } from "../game/GameMap";
 
 export class MissileSiloExecution implements Execution {
   private active = true;
-  private mg: Game;
+  private mg: Game | undefined;
   private silo: Unit | null = null;
 
   constructor(
     private player: Player,
-    private tile: TileRef,
+    private readonly tile: TileRef,
   ) {}
 
   init(mg: Game, ticks: number): void {
@@ -25,18 +25,25 @@ export class MissileSiloExecution implements Execution {
         this.active = false;
         return;
       }
-      this.silo = this.player.buildUnit(UnitType.MissileSilo, spawn, {
-        cooldownDuration: this.mg.config().SiloCooldown(),
-      });
+      this.silo = this.player.buildUnit(UnitType.MissileSilo, spawn, {});
 
       if (this.player !== this.silo.owner()) {
         this.player = this.silo.owner();
       }
     }
 
-    const cooldown = this.silo.ticksLeftInCooldown();
-    if (typeof cooldown === "number" && cooldown >= 0) {
-      this.silo.touch();
+    // frontTime is the time the earliest missile fired.
+    const frontTime = this.silo.missileTimerQueue()[0];
+    if (frontTime === undefined) {
+      return;
+    }
+
+    if (this.mg === undefined) throw new Error("Not initialized");
+    const cooldown =
+      this.mg.config().SiloCooldown() - (this.mg.ticks() - frontTime);
+
+    if (cooldown <= 0) {
+      this.silo.reloadMissile();
     }
   }
 

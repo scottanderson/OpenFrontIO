@@ -1,15 +1,14 @@
+import * as dotenv from "dotenv";
 import * as logsAPI from "@opentelemetry/api-logs";
-import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import {
   LoggerProvider,
   SimpleLogRecordProcessor,
 } from "@opentelemetry/sdk-logs";
+import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OpenTelemetryTransportV3 } from "@opentelemetry/winston-transport";
-import * as dotenv from "dotenv";
-import winston from "winston";
-import { GameEnv } from "../core/configuration/Config";
-import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
 import { getOtelResource } from "./OtelResource";
+import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
+import winston from "winston";
 dotenv.config();
 
 const config = getServerConfigFromServer();
@@ -21,21 +20,16 @@ const loggerProvider = new LoggerProvider({
   resource,
 });
 
-if (config.env() === GameEnv.Prod && config.otelEnabled()) {
+if (config.otelEnabled()) {
   console.log("OTEL enabled");
   // Configure OpenTelemetry endpoint with basic auth (if provided)
-  const headers = {};
-  if (config.otelUsername() && config.otelPassword()) {
-    headers["Authorization"] =
-      "Basic " +
-      Buffer.from(`${config.otelUsername()}:${config.otelPassword()}`).toString(
-        "base64",
-      );
-  }
+  const headers: Record<string, string> = {};
+  headers["Authorization"] = config.otelAuthHeader();
 
   // Add OTLP exporter for logs
   const logExporter = new OTLPLogExporter({
     url: `${config.otelEndpoint()}/v1/logs`,
+    // eslint-disable-next-line sort-keys
     headers,
   });
 
@@ -63,6 +57,7 @@ const addSeverityFormat = winston.format((info) => {
 // Define your base/parent logger
 const logger = winston.createLogger({
   level: "info",
+  /* eslint-disable sort-keys */
   format: winston.format.combine(
     winston.format.timestamp(),
     addSeverityFormat(),
@@ -72,6 +67,7 @@ const logger = winston.createLogger({
     service: "openfront",
     environment: process.env.GAME_ENV ?? "prod",
   },
+  /* eslint-enable sort-keys */
   transports: [
     new winston.transports.Console(),
     new OpenTelemetryTransportV3(),

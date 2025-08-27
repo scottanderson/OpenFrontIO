@@ -1,16 +1,19 @@
-import { LitElement, html } from "lit";
-import { customElement, query, state } from "lit/decorators.js";
-import { translateText } from "../client/Utils";
-import { UserSettings } from "../core/game/UserSettings";
 import "./components/baseComponents/setting/SettingKeybind";
-import { SettingKeybind } from "./components/baseComponents/setting/SettingKeybind";
 import "./components/baseComponents/setting/SettingNumber";
 import "./components/baseComponents/setting/SettingSlider";
 import "./components/baseComponents/setting/SettingToggle";
+import { LitElement, html } from "lit";
+import { customElement, query, state } from "lit/decorators.js";
+import { SettingKeybind } from "./components/baseComponents/setting/SettingKeybind";
+import { UserSettings } from "../core/game/UserSettings";
+import { translateText } from "../client/Utils";
+import { z } from "zod";
+
+const KeybindSchema = z.record(z.string(), z.string());
 
 @customElement("user-setting")
 export class UserSettingModal extends LitElement {
-  private userSettings: UserSettings = new UserSettings();
+  private readonly userSettings: UserSettings = new UserSettings();
 
   @state() private settingsMode: "basic" | "keybinds" = "basic";
   @state() private keybinds: Record<string, string> = {};
@@ -25,14 +28,14 @@ export class UserSettingModal extends LitElement {
     const savedKeybinds = localStorage.getItem("settings.keybinds");
     if (savedKeybinds) {
       try {
-        this.keybinds = JSON.parse(savedKeybinds);
+        this.keybinds = KeybindSchema.parse(JSON.parse(savedKeybinds));
       } catch (e) {
         console.warn("Invalid keybinds JSON:", e);
       }
     }
   }
 
-  @query("o-modal") private modalEl!: HTMLElement & {
+  @query("o-modal") private readonly modalEl!: HTMLElement & {
     open: () => void;
     close: () => void;
     isModalOpen: boolean;
@@ -48,8 +51,13 @@ export class UserSettingModal extends LitElement {
     document.body.style.overflow = "auto";
   }
 
-  private handleKeyDown = (e: KeyboardEvent) => {
+  private readonly handleKeyDown = (e: KeyboardEvent) => {
     if (!this.modalEl?.isModalOpen || this.showEasterEggSettings) return;
+
+    if (e.code === "Escape") {
+      e.preventDefault();
+      this.close();
+    }
 
     const key = e.key.toLowerCase();
     const nextSequence = [...this.keySequence, key].slice(-4);
@@ -90,6 +98,14 @@ export class UserSettingModal extends LitElement {
       document.documentElement.classList.remove("dark");
     }
 
+    this.dispatchEvent(
+      new CustomEvent("dark-mode-changed", {
+        detail: { darkMode: enabled },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+
     console.log("🌙 Dark Mode:", enabled ? "ON" : "OFF");
   }
 
@@ -102,6 +118,15 @@ export class UserSettingModal extends LitElement {
     console.log("🤡 Emojis:", enabled ? "ON" : "OFF");
   }
 
+  private toggleAlertFrame(e: CustomEvent<{ checked: boolean }>) {
+    const enabled = e.detail?.checked;
+    if (typeof enabled !== "boolean") return;
+
+    this.userSettings.set("settings.alertFrame", enabled);
+
+    console.log("🚨 Alert frame:", enabled ? "ON" : "OFF");
+  }
+
   private toggleFxLayer(e: CustomEvent<{ checked: boolean }>) {
     const enabled = e.detail?.checked;
     if (typeof enabled !== "boolean") return;
@@ -111,6 +136,15 @@ export class UserSettingModal extends LitElement {
     console.log("💥 Special effects:", enabled ? "ON" : "OFF");
   }
 
+  private toggleStructureSprites(e: CustomEvent<{ checked: boolean }>) {
+    const enabled = e.detail?.checked;
+    if (typeof enabled !== "boolean") return;
+
+    this.userSettings.set("settings.structureSprites", enabled);
+
+    console.log("🏠 Structure sprites:", enabled ? "ON" : "OFF");
+  }
+
   private toggleAnonymousNames(e: CustomEvent<{ checked: boolean }>) {
     const enabled = e.detail?.checked;
     if (typeof enabled !== "boolean") return;
@@ -118,6 +152,14 @@ export class UserSettingModal extends LitElement {
     this.userSettings.set("settings.anonymousNames", enabled);
 
     console.log("🙈 Anonymous Names:", enabled ? "ON" : "OFF");
+  }
+
+  private toggleLobbyIdVisibility(e: CustomEvent<{ checked: boolean }>) {
+    const hideIds = e.detail?.checked;
+    if (typeof hideIds !== "boolean") return;
+
+    this.userSettings.set("settings.lobbyIdVisibility", !hideIds); // Invert because checked=hide
+    console.log("👁️ Hidden Lobby IDs:", hideIds ? "ON" : "OFF");
   }
 
   private toggleLeftClickOpensMenu(e: CustomEvent<{ checked: boolean }>) {
@@ -140,14 +182,20 @@ export class UserSettingModal extends LitElement {
     }
   }
 
-  private sliderTroopRatio(e: CustomEvent<{ value: number }>) {
-    const value = e.detail?.value;
-    if (typeof value === "number") {
-      const ratio = value / 100;
-      localStorage.setItem("settings.troopRatio", ratio.toString());
-    } else {
-      console.warn("Slider event missing detail.value", e);
-    }
+  private toggleTerritoryPatterns(e: CustomEvent<{ checked: boolean }>) {
+    const enabled = e.detail?.checked;
+    if (typeof enabled !== "boolean") return;
+
+    this.userSettings.set("settings.territoryPatterns", enabled);
+
+    console.log("🏳️ Territory Patterns:", enabled ? "ON" : "OFF");
+  }
+
+  private togglePerformanceOverlay(e: CustomEvent<{ checked: boolean }>) {
+    const enabled = e.detail?.checked;
+    if (typeof enabled !== "boolean") return;
+
+    this.userSettings.set("settings.performanceOverlay", enabled);
   }
 
   private handleKeybindChange(
@@ -186,8 +234,8 @@ export class UserSettingModal extends LitElement {
               <button
                 class="w-1/2 text-center px-3 py-1 rounded-l 
       ${this.settingsMode === "basic"
-                  ? "bg-white/10 text-white"
-                  : "bg-transparent text-gray-400"}"
+        ? "bg-white/10 text-white"
+        : "bg-transparent text-gray-400"}"
                 @click=${() => (this.settingsMode = "basic")}
               >
                 ${translateText("user_setting.tab_basic")}
@@ -195,8 +243,8 @@ export class UserSettingModal extends LitElement {
               <button
                 class="w-1/2 text-center px-3 py-1 rounded-r 
       ${this.settingsMode === "keybinds"
-                  ? "bg-white/10 text-white"
-                  : "bg-transparent text-gray-400"}"
+        ? "bg-white/10 text-white"
+        : "bg-transparent text-gray-400"}"
                 @click=${() => (this.settingsMode = "keybinds")}
               >
                 ${translateText("user_setting.tab_keybinds")}
@@ -235,6 +283,15 @@ export class UserSettingModal extends LitElement {
         @change=${this.toggleEmojis}
       ></setting-toggle>
 
+      <!-- 🚨 Alert frame -->
+      <setting-toggle
+        label="${translateText("user_setting.alert_frame_label")}"
+        description="${translateText("user_setting.alert_frame_desc")}"
+        id="alert-frame-toggle"
+        .checked=${this.userSettings.alertFrame()}
+        @change=${this.toggleAlertFrame}
+      ></setting-toggle>
+
       <!-- 💥 Special effects -->
       <setting-toggle
         label="${translateText("user_setting.special_effects_label")}"
@@ -242,6 +299,15 @@ export class UserSettingModal extends LitElement {
         id="special-effect-toggle"
         .checked=${this.userSettings.fxLayer()}
         @change=${this.toggleFxLayer}
+      ></setting-toggle>
+
+      <!-- 🏠 Structure Sprites -->
+      <setting-toggle
+        label="${translateText("user_setting.structure_sprites_label")}"
+        description="${translateText("user_setting.structure_sprites_desc")}"
+        id="structure_sprites-toggle"
+        .checked=${this.userSettings.structureSprites()}
+        @change=${this.toggleStructureSprites}
       ></setting-toggle>
 
       <!-- 🖱️ Left Click Menu -->
@@ -262,6 +328,33 @@ export class UserSettingModal extends LitElement {
         @change=${this.toggleAnonymousNames}
       ></setting-toggle>
 
+      <!-- 👁️ Hidden Lobby IDs -->
+      <setting-toggle
+        label="${translateText("user_setting.lobby_id_visibility_label")}"
+        description="${translateText("user_setting.lobby_id_visibility_desc")}"
+        id="lobby-id-visibility-toggle"
+        .checked=${!this.userSettings.get("settings.lobbyIdVisibility", true)}
+        @change=${this.toggleLobbyIdVisibility}
+      ></setting-toggle>
+
+      <!-- 🏳️ Territory Patterns -->
+      <setting-toggle
+        label="${translateText("user_setting.territory_patterns_label")}"
+        description="${translateText("user_setting.territory_patterns_desc")}"
+        id="territory-patterns-toggle"
+        .checked=${this.userSettings.territoryPatterns()}
+        @change=${this.toggleTerritoryPatterns}
+      ></setting-toggle>
+
+      <!-- 📱 Performance Overlay -->
+      <setting-toggle
+        label="${translateText("user_setting.performance_overlay_label")}"
+        description="${translateText("user_setting.performance_overlay_desc")}"
+        id="performance-overlay-toggle"
+        .checked=${this.userSettings.performanceOverlay()}
+        @change=${this.togglePerformanceOverlay}
+      ></setting-toggle>
+
       <!-- ⚔️ Attack Ratio -->
       <setting-slider
         label="${translateText("user_setting.attack_ratio_label")}"
@@ -271,17 +364,6 @@ export class UserSettingModal extends LitElement {
         .value=${Number(localStorage.getItem("settings.attackRatio") ?? "0.2") *
         100}
         @change=${this.sliderAttackRatio}
-      ></setting-slider>
-
-      <!-- 🪖🛠️ Troop Ratio -->
-      <setting-slider
-        label="${translateText("user_setting.troop_ratio_label")}"
-        description="${translateText("user_setting.troop_ratio_desc")}"
-        min="1"
-        max="100"
-        .value=${Number(localStorage.getItem("settings.troopRatio") ?? "0.95") *
-        100}
-        @change=${this.sliderTroopRatio}
       ></setting-slider>
 
       ${this.showEasterEggSettings
@@ -297,7 +379,7 @@ export class UserSettingModal extends LitElement {
               max="100"
               value="40"
               easter="true"
-              @change=${(e: CustomEvent) => {
+              @change=${(e: CustomEvent<{ value: unknown }>) => {
                 const value = e.detail?.value;
                 if (value !== undefined) {
                   console.log("Changed:", value);
@@ -316,7 +398,7 @@ export class UserSettingModal extends LitElement {
               min="0"
               max="1000"
               easter="true"
-              @change=${(e: CustomEvent) => {
+              @change=${(e: CustomEvent<{ value: unknown }>) => {
                 const value = e.detail?.value;
                 if (value !== undefined) {
                   console.log("Changed:", value);
@@ -377,6 +459,15 @@ export class UserSettingModal extends LitElement {
         description=${translateText("user_setting.boat_attack_desc")}
         defaultKey="KeyB"
         .value=${this.keybinds["boatAttack"] ?? ""}
+        @change=${this.handleKeybindChange}
+      ></setting-keybind>
+
+      <setting-keybind
+        action="groundAttack"
+        label=${translateText("user_setting.ground_attack")}
+        description=${translateText("user_setting.ground_attack_desc")}
+        defaultKey="KeyG"
+        .value=${this.keybinds["groundAttack"] ?? ""}
         @change=${this.handleKeybindChange}
       ></setting-keybind>
 

@@ -1,31 +1,47 @@
+import {
+  BuildUnitIntentEvent,
+  SendUpgradeStructureIntentEvent,
+} from "../../Transport";
+import {
+  BuildableUnit,
+  Gold,
+  PlayerActions,
+  UnitType,
+} from "../../../core/game/Game";
+import {
+  CloseViewEvent,
+  MouseDownEvent,
+  ShowBuildMenuEvent,
+  ShowEmojiMenuEvent,
+} from "../../InputHandler";
 import { LitElement, css, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import warshipIcon from "../../../../resources/images/BattleshipIconWhite.svg";
-import cityIcon from "../../../../resources/images/CityIconWhite.svg";
-import goldCoinIcon from "../../../../resources/images/GoldCoinIcon.svg";
-import mirvIcon from "../../../../resources/images/MIRVIcon.svg";
-import missileSiloIcon from "../../../../resources/images/MissileSiloIconWhite.svg";
-import hydrogenBombIcon from "../../../../resources/images/MushroomCloudIconWhite.svg";
+import { EventBus } from "../../../core/EventBus";
+import { GameView } from "../../../core/game/GameView";
+import { Layer } from "./Layer";
+import { TileRef } from "../../../core/game/GameMap";
+import { TransformHandler } from "../TransformHandler";
 import atomBombIcon from "../../../../resources/images/NukeIconWhite.svg";
+import cityIcon from "../../../../resources/images/CityIconWhite.svg";
+import factoryIcon from "../../../../resources/images/FactoryIconWhite.svg";
+import goldCoinIcon from "../../../../resources/images/GoldCoinIcon.svg";
+import hydrogenBombIcon from "../../../../resources/images/MushroomCloudIconWhite.svg";
+import mirvIcon from "../../../../resources/images/MIRVIcon.svg";
+import missileSiloIcon from "../../../../resources/non-commercial/svg/MissileSiloIconWhite.svg";
 import portIcon from "../../../../resources/images/PortIcon.svg";
-import samlauncherIcon from "../../../../resources/images/SamLauncherIconWhite.svg";
+import { renderNumber } from "../../Utils";
+import samlauncherIcon from "../../../../resources/non-commercial/svg/SamLauncherIconWhite.svg";
 import shieldIcon from "../../../../resources/images/ShieldIconWhite.svg";
 import { translateText } from "../../../client/Utils";
-import { EventBus } from "../../../core/EventBus";
-import { Cell, Gold, PlayerActions, UnitType } from "../../../core/game/Game";
-import { TileRef } from "../../../core/game/GameMap";
-import { GameView } from "../../../core/game/GameView";
-import { BuildUnitIntentEvent } from "../../Transport";
-import { renderNumber } from "../../Utils";
-import { Layer } from "./Layer";
+import warshipIcon from "../../../../resources/images/BattleshipIconWhite.svg";
 
-export interface BuildItemDisplay {
+export type BuildItemDisplay = {
   unitType: UnitType;
   icon: string;
   description?: string;
   key?: string;
   countable?: boolean;
-}
+};
 
 export const buildTable: BuildItemDisplay[][] = [
   [
@@ -93,6 +109,13 @@ export const buildTable: BuildItemDisplay[][] = [
       key: "unit_type.city",
       countable: true,
     },
+    {
+      unitType: UnitType.Factory,
+      icon: factoryIcon,
+      description: "build_menu.desc.factory",
+      key: "unit_type.factory",
+      countable: true,
+    },
   ],
 ];
 
@@ -100,11 +123,43 @@ export const flattenedBuildTable = buildTable.flat();
 
 @customElement("build-menu")
 export class BuildMenu extends LitElement implements Layer {
-  public game: GameView;
-  public eventBus: EventBus;
-  private clickedTile: TileRef;
-  public playerActions: PlayerActions | null;
+  public game: GameView | undefined;
+  public eventBus: EventBus | undefined;
+  private clickedTile: TileRef | undefined;
+  public playerActions: PlayerActions | null = null;
   private filteredBuildTable: BuildItemDisplay[][] = buildTable;
+  public transformHandler: TransformHandler | undefined;
+
+  init() {
+    if (this.eventBus === undefined) throw new Error("Not initialized");
+    this.eventBus.on(ShowBuildMenuEvent, (e) => {
+      if (!this.game) return;
+      if (!this.transformHandler) return;
+      if (!this.game.myPlayer()?.isAlive()) {
+        return;
+      }
+      if (!this._hidden) {
+        // Players sometimes hold control while building a unit,
+        // so if the menu is already open, ignore the event.
+        return;
+      }
+      const clickedCell = this.transformHandler.screenToWorldCoordinates(
+        e.x,
+        e.y,
+      );
+      if (clickedCell === null) {
+        return;
+      }
+      if (!this.game.isValidCoord(clickedCell.x, clickedCell.y)) {
+        return;
+      }
+      const tile = this.game.ref(clickedCell.x, clickedCell.y);
+      this.showMenu(tile);
+    });
+    this.eventBus.on(CloseViewEvent, () => this.hideMenu());
+    this.eventBus.on(ShowEmojiMenuEvent, () => this.hideMenu());
+    this.eventBus.on(MouseDownEvent, () => this.hideMenu());
+  }
 
   tick() {
     if (!this._hidden) {
@@ -304,7 +359,7 @@ export class BuildMenu extends LitElement implements Layer {
   @state()
   private _hidden = true;
 
-  public canBuild(item: BuildItemDisplay): boolean {
+  public canBuildOrUpgrade(item: BuildItemDisplay): boolean {
     if (this.game?.myPlayer() === null || this.playerActions === null) {
       return false;
     }
@@ -313,7 +368,7 @@ export class BuildMenu extends LitElement implements Layer {
     if (unit.length === 0) {
       return false;
     }
-    return unit[0].canBuild !== false;
+    return unit[0].canBuild !== false || unit[0].canUpgrade !== false;
   }
 
   public cost(item: BuildItemDisplay): Gold {
@@ -331,35 +386,51 @@ export class BuildMenu extends LitElement implements Layer {
       return "?";
     }
 
-    return player.units(item.unitType).length.toString();
+    return player.totalUnitLevels(item.unitType).toString();
   }
 
-  public onBuildSelected = (item: BuildItemDisplay) => {
-    this.eventBus.emit(
-      new BuildUnitIntentEvent(
-        item.unitType,
-        new Cell(this.game.x(this.clickedTile), this.game.y(this.clickedTile)),
-      ),
-    );
+  public sendBuildOrUpgrade(buildableUnit: BuildableUnit, tile?: TileRef): void {
+    if (tile === undefined) throw new Error("Missing tile");
+    if (this.eventBus === undefined) throw new Error("Not initialized");
+    if (buildableUnit.canUpgrade !== false) {
+      this.eventBus.emit(
+        new SendUpgradeStructureIntentEvent(
+          buildableUnit.canUpgrade,
+          buildableUnit.type,
+        ),
+      );
+    } else if (buildableUnit.canBuild) {
+      this.eventBus.emit(new BuildUnitIntentEvent(buildableUnit.type, tile));
+    }
     this.hideMenu();
-  };
+  }
 
   render() {
     return html`
       <div
         class="build-menu ${this._hidden ? "hidden" : ""}"
-        @contextmenu=${(e) => e.preventDefault()}
+        @contextmenu=${(e: MouseEvent) => e.preventDefault()}
       >
         ${this.filteredBuildTable.map(
           (row) => html`
             <div class="build-row">
-              ${row.map(
-                (item) => html`
+              ${row.map((item) => {
+                const buildableUnit = this.playerActions?.buildableUnits.find(
+                  (bu) => bu.type === item.unitType,
+                );
+                if (buildableUnit === undefined) {
+                  return html``;
+                }
+                const enabled =
+                  buildableUnit.canBuild !== false ||
+                  buildableUnit.canUpgrade !== false;
+                return html`
                   <button
                     class="build-button"
-                    @click=${() => this.onBuildSelected(item)}
-                    ?disabled=${!this.canBuild(item)}
-                    title=${!this.canBuild(item)
+                    @click=${() =>
+                      this.sendBuildOrUpgrade(buildableUnit, this.clickedTile)}
+                    ?disabled=${!enabled}
+                    title=${!enabled
                       ? translateText("build_menu.not_enough_money")
                       : ""}
                   >
@@ -394,8 +465,8 @@ export class BuildMenu extends LitElement implements Layer {
                         </div>`
                       : ""}
                   </button>
-                `,
-              )}
+                `;
+              })}
             </div>
           `,
         )}
@@ -415,8 +486,9 @@ export class BuildMenu extends LitElement implements Layer {
   }
 
   private refresh() {
+    if (this.clickedTile === undefined) return;
     this.game
-      .myPlayer()
+      ?.myPlayer()
       ?.actions(this.clickedTile)
       .then((actions) => {
         this.playerActions = actions;

@@ -1,10 +1,19 @@
-import { JWK } from "jose";
 import { GameEnv, ServerConfig } from "../../src/core/configuration/Config";
-import { GameMapType } from "../../src/core/game/Game";
 import { GameID } from "../../src/core/Schemas";
+import { GameMapType } from "../../src/core/game/Game";
+import { JWK } from "jose";
 
 export class TestServerConfig implements ServerConfig {
-  cloudflareConfigDir(): string {
+  allowedFlares(): string[] | undefined {
+    throw new Error("Method not implemented.");
+  }
+  stripePublishableKey(): string {
+    throw new Error("Method not implemented.");
+  }
+  cloudflareConfigPath(): string {
+    throw new Error("Method not implemented.");
+  }
+  cloudflareCredsPath(): string {
     throw new Error("Method not implemented.");
   }
   domain(): string {
@@ -34,14 +43,8 @@ export class TestServerConfig implements ServerConfig {
   otelEndpoint(): string {
     throw new Error("Method not implemented.");
   }
-  otelUsername(): string {
+  otelAuthHeader(): string {
     throw new Error("Method not implemented.");
-  }
-  otelPassword(): string {
-    throw new Error("Method not implemented.");
-  }
-  region(): string {
-    return "test";
   }
   turnIntervalMs(): number {
     throw new Error("Method not implemented.");

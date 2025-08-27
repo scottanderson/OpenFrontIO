@@ -1,4 +1,3 @@
-import { renderNumber, renderTroops } from "../../client/Utils";
 import {
   Attack,
   Execution,
@@ -7,33 +6,35 @@ import {
   Player,
   PlayerID,
   PlayerType,
-  TerrainType,
   TerraNullius,
+  TerrainType,
 } from "../game/Game";
-import { TileRef } from "../game/GameMap";
-import { PseudoRandom } from "../PseudoRandom";
 import { FlatBinaryHeap } from "./utils/FlatBinaryHeap"; // adjust path if needed
+import { PseudoRandom } from "../PseudoRandom";
+import { TileRef } from "../game/GameMap";
+import { renderTroops } from "../../client/Utils";
 
 const malusForRetreat = 25;
 export class AttackExecution implements Execution {
   private breakAlliance = false;
-  private active: boolean = true;
-  private toConquer = new FlatBinaryHeap();
+  private wasAlliedAtInit = false; // Store alliance state at initialization
+  private active = true;
+  private readonly toConquer = new FlatBinaryHeap();
 
-  private random = new PseudoRandom(123);
+  private readonly random = new PseudoRandom(123);
 
-  private target: Player | TerraNullius;
+  private target: Player | TerraNullius | undefined;
 
-  private mg: Game;
+  private mg: Game | undefined;
 
   private attack: Attack | null = null;
 
   constructor(
     private startTroops: number | null = null,
-    private _owner: Player,
-    private _targetID: PlayerID | null,
-    private sourceTile: TileRef | null = null,
-    private removeTroops: boolean = true,
+    private readonly _owner: Player,
+    private readonly _targetID: PlayerID | null,
+    private readonly sourceTile: TileRef | null = null,
+    private readonly removeTroops = true,
   ) {}
 
   public targetID(): PlayerID | null {
@@ -61,21 +62,22 @@ export class AttackExecution implements Execution {
         ? mg.terraNullius()
         : mg.player(this._targetID);
 
+    if (this._owner === this.target) {
+      console.error(`Player ${this._owner} cannot attack itself`);
+      this.active = false;
+      return;
+    }
+
     if (this.target && this.target.isPlayer()) {
-      const targetPlayer = this.target as Player;
+      const targetPlayer = this.target;
       if (
         targetPlayer.type() !== PlayerType.Bot &&
         this._owner.type() !== PlayerType.Bot
       ) {
         // Don't let bots embargo since they can't trade anyway.
-        targetPlayer.addEmbargo(this._owner.id(), true);
+        targetPlayer.addEmbargo(this._owner, true);
+        this.rejectIncomingAllianceRequests(targetPlayer);
       }
-    }
-
-    if (this._owner === this.target) {
-      console.error(`Player ${this._owner} cannot attack itself`);
-      this.active = false;
-      return;
     }
 
     if (this.target.isPlayer()) {
@@ -97,11 +99,9 @@ export class AttackExecution implements Execution {
       }
     }
 
-    if (this.startTroops === null) {
-      this.startTroops = this.mg
-        .config()
-        .attackAmount(this._owner, this.target);
-    }
+    this.startTroops ??= this.mg
+      .config()
+      .attackAmount(this._owner, this.target);
     if (this.removeTroops) {
       this.startTroops = Math.min(this._owner.troops(), this.startTroops);
       this._owner.removeTroops(this.startTroops);
@@ -140,19 +140,18 @@ export class AttackExecution implements Execution {
       if (
         outgoing !== this.attack &&
         outgoing.target() === this.attack.target() &&
-        outgoing.sourceTile() === this.attack.sourceTile()
+        // Boat attacks (sourceTile is not null) are not combined with other attacks
+        this.attack.sourceTile() === null
       ) {
-        // Existing attack on same target, add troops
-        outgoing.setTroops(outgoing.troops() + this.attack.troops());
-        this.active = false;
-        this.attack.delete();
-        return;
+        this.attack.setTroops(this.attack.troops() + outgoing.troops());
+        outgoing.delete();
       }
     }
 
     if (this.target.isPlayer()) {
-      if (this._owner.isAlliedWith(this.target)) {
-        // No updates should happen in init.
+      // Store the alliance state at initialization time to prevent race conditions
+      this.wasAlliedAtInit = this._owner.isAlliedWith(this.target);
+      if (this.wasAlliedAtInit) {
         this.breakAlliance = true;
       }
       this.target.updateRelation(this._owner, -80);
@@ -172,6 +171,9 @@ export class AttackExecution implements Execution {
   }
 
   private retreat(malusPercent = 0) {
+    if (this.mg === undefined) {
+      throw new Error("Attack not initialized");
+    }
     if (this.attack === null) {
       throw new Error("Attack not initialized");
     }
@@ -180,7 +182,7 @@ export class AttackExecution implements Execution {
     if (deaths) {
       this.mg.displayMessage(
         `Attack cancelled, ${renderTroops(deaths)} soldiers killed during retreat.`,
-        MessageType.SUCCESS,
+        MessageType.ATTACK_CANCELLED,
         this._owner.id(),
       );
     }
@@ -189,20 +191,28 @@ export class AttackExecution implements Execution {
     this.attack.delete();
     this.active = false;
 
-    // Record stats
-    this.mg.stats().attackCancel(this._owner, this.target, survivors);
+    // Not all retreats are canceled attacks
+    if (this.attack.retreated() && this.target && this.target.isPlayer()) {
+      // Record stats
+      this.mg.stats().attackCancel(this._owner, this.target, survivors);
+    }
   }
 
   tick(ticks: number) {
+    if (this.mg === undefined) {
+      throw new Error("Attack not initialized");
+    }
+    if (this.target === undefined) {
+      throw new Error("Attack not initialized");
+    }
     if (this.attack === null) {
       throw new Error("Attack not initialized");
     }
     let troopCount = this.attack.troops(); // cache troop count
-    const targetIsPlayer = this.target.isPlayer(); // cache target type
-    const targetPlayer = targetIsPlayer ? (this.target as Player) : null; // cache target player
+    const targetPlayer: Player | null = this.target.isPlayer() ? this.target : null; // cache target player
 
     if (this.attack.retreated()) {
-      if (targetIsPlayer) {
+      if (targetPlayer !== null) {
         this.retreat(malusForRetreat);
       } else {
         this.retreat();
@@ -220,15 +230,20 @@ export class AttackExecution implements Execution {
       return;
     }
 
-    const alliance = targetPlayer
-      ? this._owner.allianceWith(targetPlayer)
+    const alliance = this.target && this.target.isPlayer()
+      ? this._owner.allianceWith(this.target)
       : null;
     if (this.breakAlliance && alliance !== null) {
       this.breakAlliance = false;
       this._owner.breakAlliance(alliance);
     }
-    if (targetPlayer && this._owner.isAlliedWith(targetPlayer)) {
+    if (
+      targetPlayer &&
+      this._owner.isAlliedWith(targetPlayer) &&
+      !this.wasAlliedAtInit
+    ) {
       // In this case a new alliance was created AFTER the attack started.
+      // We should retreat to avoid the attacker becoming a traitor.
       this.retreat();
       return;
     }
@@ -289,8 +304,20 @@ export class AttackExecution implements Execution {
     }
   }
 
+  private rejectIncomingAllianceRequests(target: Player) {
+    const request = this._owner
+      .incomingAllianceRequests()
+      .find((ar) => ar.requestor() === target);
+    if (request !== undefined) {
+      request.reject();
+    }
+  }
+
   private addNeighbors(tile: TileRef) {
     if (this.attack === null) {
+      throw new Error("Attack not initialized");
+    }
+    if (this.mg === undefined) {
       throw new Error("Attack not initialized");
     }
 
@@ -333,24 +360,17 @@ export class AttackExecution implements Execution {
   }
 
   private handleDeadDefender() {
+    if (!this.mg) return;
+    if (!this.target) return;
     if (!(this.target.isPlayer() && this.target.numTilesOwned() < 100)) return;
 
-    const gold = this.target.gold();
-    this.mg.displayMessage(
-      `Conquered ${this.target.displayName()} received ${renderNumber(
-        gold,
-      )} gold`,
-      MessageType.SUCCESS,
-      this._owner.id(),
-    );
-    this.target.removeGold(gold);
-    this._owner.addGold(gold);
+    this.mg.conquerPlayer(this._owner, this.target);
 
     for (let i = 0; i < 10; i++) {
       for (const tile of this.target.tiles()) {
         const borders = this.mg
           .neighbors(tile)
-          .some((t) => this.mg.owner(t) === this._owner);
+          .some((t) => this.mg?.owner(t) === this._owner);
         if (borders) {
           this._owner.conquer(tile);
         } else {

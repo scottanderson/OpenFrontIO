@@ -1,12 +1,12 @@
 // renderUnitTypeOptions.ts
-import { html, TemplateResult } from "lit";
+import { TemplateResult, html } from "lit";
 import { UnitType } from "../../core/game/Game";
 import { translateText } from "../Utils";
 
-export interface UnitTypeRenderContext {
+export type UnitTypeRenderContext = {
   disabledUnits: UnitType[];
   toggleUnit: (unit: UnitType, checked: boolean) => void;
-}
+};
 
 const unitOptions: { type: UnitType; translationKey: string }[] = [
   { type: UnitType.City, translationKey: "unit_type.city" },
@@ -18,6 +18,7 @@ const unitOptions: { type: UnitType; translationKey: string }[] = [
   { type: UnitType.AtomBomb, translationKey: "unit_type.atom_bomb" },
   { type: UnitType.HydrogenBomb, translationKey: "unit_type.hydrogen_bomb" },
   { type: UnitType.MIRV, translationKey: "unit_type.mirv" },
+  { type: UnitType.Factory, translationKey: "unit_type.factory" },
 ];
 
 export function renderUnitTypeOptions({
@@ -35,7 +36,7 @@ export function renderUnitTypeOptions({
           type="checkbox"
           .checked=${disabledUnits.includes(type)}
           @change=${(e: Event) => {
-            const checked = (e.target as HTMLInputElement).checked;
+            const { checked } = (e.target as HTMLInputElement);
             toggleUnit(type, checked);
           }}
         />

@@ -1,4 +1,3 @@
-import { renderNumber } from "../../client/Utils";
 import {
   Execution,
   Game,
@@ -7,22 +6,23 @@ import {
   Unit,
   UnitType,
 } from "../game/Game";
-import { TileRef } from "../game/GameMap";
 import { PathFindResultType } from "../pathfinding/AStar";
 import { PathFinder } from "../pathfinding/PathFinding";
+import { TileRef } from "../game/GameMap";
 import { distSortUnit } from "../Util";
+import { renderNumber } from "../../client/Utils";
 
 export class TradeShipExecution implements Execution {
   private active = true;
-  private mg: Game;
+  private mg: Game | undefined;
   private tradeShip: Unit | undefined;
   private wasCaptured = false;
-  private pathFinder: PathFinder;
+  private pathFinder: PathFinder | undefined;
   private tilesTraveled = 0;
 
   constructor(
-    private origOwner: Player,
-    private srcPort: Unit,
+    private readonly origOwner: Player,
+    private readonly srcPort: Unit,
     private _dstPort: Unit,
   ) {}
 
@@ -32,20 +32,23 @@ export class TradeShipExecution implements Execution {
   }
 
   tick(ticks: number): void {
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.pathFinder === undefined) throw new Error("Not initialized");
     if (this.tradeShip === undefined) {
       const spawn = this.origOwner.canBuild(
         UnitType.TradeShip,
         this.srcPort.tile(),
       );
       if (spawn === false) {
-        console.warn(`cannot build trade ship`);
+        console.warn("cannot build trade ship");
         this.active = false;
         return;
       }
       this.tradeShip = this.origOwner.buildUnit(UnitType.TradeShip, spawn, {
-        targetUnit: this._dstPort,
         lastSetSafeFromPirates: ticks,
+        targetUnit: this._dstPort,
       });
+      this.mg.stats().boatSendTrade(this.origOwner, this._dstPort.owner());
     }
 
     if (!this.tradeShip.isActive()) {
@@ -53,14 +56,16 @@ export class TradeShipExecution implements Execution {
       return;
     }
 
-    if (this.origOwner !== this.tradeShip.owner()) {
+    const tradeShipOwner = this.tradeShip.owner();
+    const dstPortOwner = this._dstPort.owner();
+    if (this.wasCaptured !== true && this.origOwner !== tradeShipOwner) {
       // Store as variable in case ship is recaptured by previous owner
       this.wasCaptured = true;
     }
 
     // If a player captures another player's port while trading we should delete
     // the ship.
-    if (this._dstPort.owner().id() === this.srcPort.owner().id()) {
+    if (dstPortOwner.id() === this.srcPort.owner().id()) {
       this.tradeShip.delete(false);
       this.active = false;
       return;
@@ -68,15 +73,17 @@ export class TradeShipExecution implements Execution {
 
     if (
       !this.wasCaptured &&
-      (!this._dstPort.isActive() ||
-        !this.tradeShip.owner().canTrade(this._dstPort.owner()))
+      (!this._dstPort.isActive() || !tradeShipOwner.canTrade(dstPortOwner))
     ) {
       this.tradeShip.delete(false);
       this.active = false;
       return;
     }
 
-    if (this.wasCaptured) {
+    if (
+      this.wasCaptured &&
+      (tradeShipOwner !== dstPortOwner || !this._dstPort.isActive())
+    ) {
       const ports = this.tradeShip
         .owner()
         .units(UnitType.Port)
@@ -91,26 +98,29 @@ export class TradeShipExecution implements Execution {
       }
     }
 
-    const result = this.pathFinder.nextTile(
-      this.tradeShip.tile(),
-      this._dstPort.tile(),
-    );
+    const curTile = this.tradeShip.tile();
+    if (curTile === this.dstPort()) {
+      this.complete();
+      return;
+    }
+
+    const result = this.pathFinder.nextTile(curTile, this._dstPort.tile());
 
     switch (result.type) {
-      case PathFindResultType.Completed:
-        this.complete();
-        break;
       case PathFindResultType.Pending:
         // Fire unit event to rerender.
-        this.tradeShip.move(this.tradeShip.tile());
+        this.tradeShip.move(curTile);
         break;
       case PathFindResultType.NextTile:
         // Update safeFromPirates status
-        if (this.mg.isWater(result.tile) && this.mg.isShoreline(result.tile)) {
+        if (this.mg.isWater(result.node) && this.mg.isShoreline(result.node)) {
           this.tradeShip.setSafeFromPirates();
         }
-        this.tradeShip.move(result.tile);
+        this.tradeShip.move(result.node);
         this.tilesTraveled++;
+        break;
+      case PathFindResultType.Completed:
+        this.complete();
         break;
       case PathFindResultType.PathNotFound:
         console.warn("captured trade ship cannot find route");
@@ -123,29 +133,39 @@ export class TradeShipExecution implements Execution {
   }
 
   private complete() {
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.tradeShip === undefined) throw new Error("Not initialized");
     this.active = false;
-    this.tradeShip!.delete(false);
-    const gold = this.mg.config().tradeShipGold(this.tilesTraveled);
+    this.tradeShip.delete(false);
+    const gold = this.mg
+      .config()
+      .tradeShipGold(
+        this.tilesTraveled,
+        this.tradeShip.owner().unitCount(UnitType.Port),
+      );
 
     if (this.wasCaptured) {
-      this.tradeShip!.owner().addGold(gold);
+      this.tradeShip.owner().addGold(gold, this._dstPort.tile());
       this.mg.displayMessage(
         `Received ${renderNumber(gold)} gold from ship captured from ${this.origOwner.displayName()}`,
-        MessageType.SUCCESS,
-        this.tradeShip!.owner().id(),
+        MessageType.CAPTURED_ENEMY_UNIT,
+        this.tradeShip.owner().id(),
+        gold,
       );
     } else {
       this.srcPort.owner().addGold(gold);
-      this._dstPort.owner().addGold(gold);
+      this._dstPort.owner().addGold(gold, this._dstPort.tile());
       this.mg.displayMessage(
         `Received ${renderNumber(gold)} gold from trade with ${this.srcPort.owner().displayName()}`,
-        MessageType.SUCCESS,
+        MessageType.RECEIVED_GOLD_FROM_TRADE,
         this._dstPort.owner().id(),
+        gold,
       );
       this.mg.displayMessage(
         `Received ${renderNumber(gold)} gold from trade with ${this._dstPort.owner().displayName()}`,
-        MessageType.SUCCESS,
+        MessageType.RECEIVED_GOLD_FROM_TRADE,
         this.srcPort.owner().id(),
+        gold,
       );
     }
     return;

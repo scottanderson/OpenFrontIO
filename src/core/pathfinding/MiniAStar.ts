@@ -1,18 +1,43 @@
-import { Cell } from "../game/Game";
-import { GameMap, TileRef } from "../game/GameMap";
 import { AStar, PathFindResultType } from "./AStar";
-import { SerialAStar } from "./SerialAStar";
+import { GameMap, TileRef } from "../game/GameMap";
+import { GraphAdapter, SerialAStar } from "./SerialAStar";
+import { Cell } from "../game/Game";
 
-export class MiniAStar implements AStar {
-  private aStar: AStar;
+export class GameMapAdapter implements GraphAdapter<TileRef> {
+  constructor(
+    private readonly gameMap: GameMap,
+    private readonly waterPath: boolean,
+  ) {}
+
+  neighbors(node: TileRef): TileRef[] {
+    return this.gameMap.neighbors(node);
+  }
+
+  cost(node: TileRef): number {
+    return this.gameMap.cost(node);
+  }
+
+  position(node: TileRef): { x: number; y: number } {
+    return { x: this.gameMap.x(node), y: this.gameMap.y(node) };
+  }
+
+  isTraversable(from: TileRef, to: TileRef): boolean {
+    const isWater = this.gameMap.isWater(to);
+    return this.waterPath ? isWater : !isWater;
+  }
+}
+export class MiniAStar implements AStar<TileRef> {
+  private readonly aStar: AStar<TileRef>;
 
   constructor(
-    private gameMap: GameMap,
-    private miniMap: GameMap,
-    private src: TileRef | TileRef[],
-    private dst: TileRef,
+    private readonly gameMap: GameMap,
+    private readonly miniMap: GameMap,
+    private readonly src: TileRef | TileRef[],
+    private readonly dst: TileRef,
     iterations: number,
     maxTries: number,
+    waterPath = true,
+    directionChangePenalty = 0,
   ) {
     const srcArray: TileRef[] = Array.isArray(src) ? src : [src];
     const miniSrc = srcArray.map((srcPoint) =>
@@ -32,7 +57,8 @@ export class MiniAStar implements AStar {
       miniDst,
       iterations,
       maxTries,
-      this.miniMap,
+      new GameMapAdapter(miniMap, waterPath),
+      directionChangePenalty,
     );
   }
 
@@ -87,7 +113,7 @@ function fixExtremes(upscaled: Cell[], cellDst: Cell, cellSrc?: Cell): Cell[] {
   return upscaled;
 }
 
-function upscalePath(path: Cell[], scaleFactor: number = 2): Cell[] {
+function upscalePath(path: Cell[], scaleFactor = 2): Cell[] {
   // Scale up each point
   const scaledPath = path.map(
     (point) => new Cell(point.x * scaleFactor, point.y * scaleFactor),

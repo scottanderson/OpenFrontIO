@@ -1,73 +1,51 @@
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { translateText } from "../../../client/Utils";
-import { EventBus } from "../../../core/EventBus";
-import { Gold } from "../../../core/game/Game";
-import { GameView } from "../../../core/game/GameView";
-import { AttackRatioEvent } from "../../InputHandler";
-import { SendSetTargetTroopRatioEvent } from "../../Transport";
 import { renderNumber, renderTroops } from "../../Utils";
-import { UIState } from "../UIState";
+import { AttackRatioEvent } from "../../InputHandler";
+import { ClientID } from "../../../core/Schemas";
+import { EventBus } from "../../../core/EventBus";
+import { GameView } from "../../../core/game/GameView";
+import { Gold } from "../../../core/game/Game";
 import { Layer } from "./Layer";
+import { UIState } from "../UIState";
+import { translateText } from "../../../client/Utils";
 
 @customElement("control-panel")
 export class ControlPanel extends LitElement implements Layer {
-  public game: GameView;
-  public eventBus: EventBus;
-  public uiState: UIState;
+  public game: GameView | undefined;
+  public clientID: ClientID | undefined;
+  public eventBus: EventBus | undefined;
+  public uiState: UIState | undefined;
 
   @state()
-  private attackRatio: number = 0.2;
+  private attackRatio = 0.2;
 
   @state()
-  private targetTroopRatio = 0.95;
+  private _maxTroops = 0;
 
   @state()
-  private currentTroopRatio = 0.95;
+  private troopRate = 0;
 
   @state()
-  private _population: number;
-
-  @state()
-  private _maxPopulation: number;
-
-  @state()
-  private popRate: number;
-
-  @state()
-  private _troops: number;
-
-  @state()
-  private _workers: number;
+  private _troops = 0;
 
   @state()
   private _isVisible = false;
 
   @state()
-  private _manpower: number = 0;
+  private _gold: Gold = 0n;
 
-  @state()
-  private _gold: Gold;
+  private _troopRateIsIncreasing = true;
 
-  @state()
-  private _goldPerSecond: Gold;
-
-  private _lastPopulationIncreaseRate: number;
-
-  private _popRateIsIncreasing: boolean = true;
-
-  private init_: boolean = false;
+  private _lastTroopIncreaseRate = 0;
 
   init() {
+    if (!this.uiState) throw new Error("Not initialized");
+    if (!this.eventBus) throw new Error("Not initialized");
     this.attackRatio = Number(
       localStorage.getItem("settings.attackRatio") ?? "0.2",
     );
-    this.targetTroopRatio = Number(
-      localStorage.getItem("settings.troopRatio") ?? "0.95",
-    );
-    this.init_ = true;
     this.uiState.attackRatio = this.attackRatio;
-    this.currentTroopRatio = this.targetTroopRatio;
     this.eventBus.on(AttackRatioEvent, (event) => {
       let newAttackRatio =
         (parseInt(
@@ -95,13 +73,7 @@ export class ControlPanel extends LitElement implements Layer {
   }
 
   tick() {
-    if (this.init_) {
-      this.eventBus.emit(
-        new SendSetTargetTroopRatioEvent(this.targetTroopRatio),
-      );
-      this.init_ = false;
-    }
-
+    if (!this.game) return;
     if (!this._isVisible && !this.game.inSpawnPhase()) {
       this.setVisibile(true);
     }
@@ -112,26 +84,30 @@ export class ControlPanel extends LitElement implements Layer {
       return;
     }
 
-    const popIncreaseRate = player.population() - this._population;
     if (this.game.ticks() % 5 === 0) {
-      this._popRateIsIncreasing =
-        popIncreaseRate >= this._lastPopulationIncreaseRate;
-      this._lastPopulationIncreaseRate = popIncreaseRate;
+      this.updateTroopIncrease();
     }
 
-    this._population = player.population();
-    this._maxPopulation = this.game.config().maxPopulation(player);
+    this._troops = player.troops();
+    this._maxTroops = this.game.config().maxTroops(player);
     this._gold = player.gold();
     this._troops = player.troops();
-    this._workers = player.workers();
-    this.popRate = this.game.config().populationIncreaseRate(player) * 10;
-    this._goldPerSecond = this.game.config().goldAdditionRate(player) * 10n;
-
-    this.currentTroopRatio = player.troops() / player.population();
+    this.troopRate = this.game.config().troopIncreaseRate(player) * 10;
     this.requestUpdate();
   }
 
+  private updateTroopIncrease() {
+    if (this.game === undefined) return;
+    const player = this.game.myPlayer();
+    if (player === null) return;
+    const troopIncreaseRate = this.game.config().troopIncreaseRate(player);
+    this._troopRateIsIncreasing =
+      troopIncreaseRate >= this._lastTroopIncreaseRate;
+    this._lastTroopIncreaseRate = troopIncreaseRate;
+  }
+
   onAttackRatioChange(newRatio: number) {
+    if (this.uiState === undefined) return;
     this.uiState.attackRatio = newRatio;
   }
 
@@ -146,19 +122,6 @@ export class ControlPanel extends LitElement implements Layer {
   setVisibile(visible: boolean) {
     this._isVisible = visible;
     this.requestUpdate();
-  }
-
-  targetTroops(): number {
-    return this._manpower * this.targetTroopRatio;
-  }
-
-  onTroopChange(newRatio: number) {
-    this.eventBus.emit(new SendSetTargetTroopRatioEvent(newRatio));
-  }
-
-  delta(): number {
-    const d = this._population - this.targetTroops();
-    return d;
   }
 
   render() {
@@ -204,24 +167,24 @@ export class ControlPanel extends LitElement implements Layer {
       </style>
       <div
         class="${this._isVisible
-          ? "w-full text-sm lg:text-m lg:w-72 bg-gray-800/70 p-2 pr-3 lg:p-4 shadow-lg lg:rounded-lg backdrop-blur"
+          ? "w-full sm:max-w-[320px] text-sm sm:text-base bg-gray-800/70 p-2 " +
+            "pr-3 sm:p-4 shadow-lg sm:rounded-lg backdrop-blur"
           : "hidden"}"
-        @contextmenu=${(e) => e.preventDefault()}
+        @contextmenu=${(e: MouseEvent) => e.preventDefault()}
       >
-        <div class="hidden lg:block bg-black/30 text-white mb-4 p-2 rounded">
+        <div class="block bg-black/30 text-white mb-4 p-2 rounded">
           <div class="flex justify-between mb-1">
             <span class="font-bold"
-              >${translateText("control_panel.pop")}:</span
+              >${translateText("control_panel.troops")}:</span
             >
             <span translate="no"
-              >${renderTroops(this._population)} /
-              ${renderTroops(this._maxPopulation)}
+              >${renderTroops(this._troops)} / ${renderTroops(this._maxTroops)}
               <span
-                class="${this._popRateIsIncreasing
+                class="${this._troopRateIsIncreasing
                   ? "text-green-500"
                   : "text-yellow-500"}"
                 translate="no"
-                >(+${renderTroops(this.popRate)})</span
+                >(+${renderTroops(this.troopRate)})</span
               ></span
             >
           </div>
@@ -229,47 +192,11 @@ export class ControlPanel extends LitElement implements Layer {
             <span class="font-bold"
               >${translateText("control_panel.gold")}:</span
             >
-            <span translate="no"
-              >${renderNumber(this._gold)}
-              (+${renderNumber(this._goldPerSecond)})</span
-            >
+            <span translate="no">${renderNumber(this._gold)}</span>
           </div>
         </div>
 
-        <div class="relative mb-4 lg:mb-4">
-          <label class="block text-white mb-1" translate="no"
-            >${translateText("control_panel.troops")}:
-            <span translate="no">${renderTroops(this._troops)}</span> |
-            ${translateText("control_panel.workers")}:
-            <span translate="no">${renderTroops(this._workers)}</span></label
-          >
-          <div class="relative h-8">
-            <!-- Background track -->
-            <div
-              class="absolute left-0 right-0 top-3 h-2 bg-white/20 rounded"
-            ></div>
-            <!-- Fill track -->
-            <div
-              class="absolute left-0 top-3 h-2 bg-blue-500/60 rounded transition-all duration-300"
-              style="width: ${this.currentTroopRatio * 100}%"
-            ></div>
-            <!-- Range input - exactly overlaying the visual elements -->
-            <input
-              type="range"
-              min="1"
-              max="100"
-              .value=${(this.targetTroopRatio * 100).toString()}
-              @input=${(e: Event) => {
-                this.targetTroopRatio =
-                  parseInt((e.target as HTMLInputElement).value) / 100;
-                this.onTroopChange(this.targetTroopRatio);
-              }}
-              class="absolute left-0 right-0 top-2 m-0 h-4 cursor-pointer targetTroopRatio"
-            />
-          </div>
-        </div>
-
-        <div class="relative mb-0 lg:mb-4">
+        <div class="relative mb-0 sm:mb-4">
           <label class="block text-white mb-1" translate="no"
             >${translateText("control_panel.attack_ratio")}:
             ${(this.attackRatio * 100).toFixed(0)}%

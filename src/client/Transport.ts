@@ -1,7 +1,5 @@
-import { EventBus, GameEvent } from "../core/EventBus";
 import {
   AllPlayers,
-  Cell,
   GameType,
   Gold,
   PlayerID,
@@ -9,12 +7,12 @@ import {
   Tick,
   UnitType,
 } from "../core/game/Game";
-import { PlayerView } from "../core/game/GameView";
 import {
   AllPlayersStats,
   ClientHashMessage,
   ClientIntentMessage,
   ClientJoinMessage,
+  ClientMessage,
   ClientPingMessage,
   ClientSendWinnerMessage,
   Intent,
@@ -22,9 +20,13 @@ import {
   ServerMessageSchema,
   Winner,
 } from "../core/Schemas";
-import { replacer } from "../core/Util";
+import { EventBus, GameEvent } from "../core/EventBus";
 import { LobbyConfig } from "./ClientGameRunner";
 import { LocalServer } from "./LocalServer";
+import { PlayerView } from "../core/game/GameView";
+import { TileRef } from "../core/game/GameMap";
+import { replacer } from "../core/Util";
+import { z } from "zod";
 
 export class PauseGameEvent implements GameEvent {
   constructor(public readonly paused: boolean) {}
@@ -44,6 +46,13 @@ export class SendBreakAllianceIntentEvent implements GameEvent {
   ) {}
 }
 
+export class SendUpgradeStructureIntentEvent implements GameEvent {
+  constructor(
+    public readonly unitId: number,
+    public readonly unitType: UnitType,
+  ) {}
+}
+
 export class SendAllianceReplyIntentEvent implements GameEvent {
   constructor(
     // The original alliance requestor
@@ -53,8 +62,12 @@ export class SendAllianceReplyIntentEvent implements GameEvent {
   ) {}
 }
 
+export class SendAllianceExtensionIntentEvent implements GameEvent {
+  constructor(public readonly recipient: PlayerView) {}
+}
+
 export class SendSpawnIntentEvent implements GameEvent {
-  constructor(public readonly cell: Cell) {}
+  constructor(public readonly tile: TileRef) {}
 }
 
 export class SendAttackIntentEvent implements GameEvent {
@@ -67,16 +80,16 @@ export class SendAttackIntentEvent implements GameEvent {
 export class SendBoatAttackIntentEvent implements GameEvent {
   constructor(
     public readonly targetID: PlayerID | null,
-    public readonly dst: Cell,
+    public readonly dst: TileRef,
     public readonly troops: number,
-    public readonly src: Cell | null = null,
+    public readonly src: TileRef | null = null,
   ) {}
 }
 
 export class BuildUnitIntentEvent implements GameEvent {
   constructor(
     public readonly unit: UnitType,
-    public readonly cell: Cell,
+    public readonly tile: TileRef,
   ) {}
 }
 
@@ -109,7 +122,7 @@ export class SendQuickChatEvent implements GameEvent {
   constructor(
     public readonly recipient: PlayerView,
     public readonly quickChatKey: string,
-    public readonly variables: { [key: string]: string },
+    public readonly target?: PlayerID,
   ) {}
 }
 
@@ -120,16 +133,16 @@ export class SendEmbargoIntentEvent implements GameEvent {
   ) {}
 }
 
+export class SendDeleteUnitIntentEvent implements GameEvent {
+  constructor(public readonly unitId: number) {}
+}
+
 export class CancelAttackIntentEvent implements GameEvent {
   constructor(public readonly attackID: string) {}
 }
 
 export class CancelBoatIntentEvent implements GameEvent {
   constructor(public readonly unitID: number) {}
-}
-
-export class SendSetTargetTroopRatioEvent implements GameEvent {
-  constructor(public readonly ratio: number) {}
 }
 
 export class SendWinnerEvent implements GameEvent {
@@ -152,21 +165,25 @@ export class MoveWarshipIntentEvent implements GameEvent {
   ) {}
 }
 
+export class SendKickPlayerIntentEvent implements GameEvent {
+  constructor(public readonly target: string) {}
+}
+
 export class Transport {
   private socket: WebSocket | null = null;
 
-  private localServer: LocalServer;
+  private localServer: LocalServer | undefined;
 
-  private buffer: string[] = [];
+  private readonly buffer: string[] = [];
 
-  private onconnect: () => void;
-  private onmessage: (msg: ServerMessage) => void;
+  private onconnect: (() => void) | undefined;
+  private onmessage: ((msg: ServerMessage) => void) | undefined;
 
   private pingInterval: number | null = null;
   public readonly isLocal: boolean;
   constructor(
-    private lobbyConfig: LobbyConfig,
-    private eventBus: EventBus,
+    private readonly lobbyConfig: LobbyConfig,
+    private readonly eventBus: EventBus,
   ) {
     // If gameRecord is not null, we are replaying an archived game.
     // For multiplayer games, GameConfig is not known until game starts.
@@ -180,6 +197,9 @@ export class Transport {
     this.eventBus.on(SendAllianceReplyIntentEvent, (e) =>
       this.onAllianceRequestReplyUIEvent(e),
     );
+    this.eventBus.on(SendAllianceExtensionIntentEvent, (e) =>
+      this.onSendAllianceExtensionIntent(e),
+    );
     this.eventBus.on(SendBreakAllianceIntentEvent, (e) =>
       this.onBreakAllianceRequestUIEvent(e),
     );
@@ -187,6 +207,9 @@ export class Transport {
       this.onSendSpawnIntentEvent(e),
     );
     this.eventBus.on(SendAttackIntentEvent, (e) => this.onSendAttackIntent(e));
+    this.eventBus.on(SendUpgradeStructureIntentEvent, (e) =>
+      this.onSendUpgradeStructureIntent(e),
+    );
     this.eventBus.on(SendBoatAttackIntentEvent, (e) =>
       this.onSendBoatAttackIntent(e),
     );
@@ -204,9 +227,6 @@ export class Transport {
     this.eventBus.on(SendEmbargoIntentEvent, (e) =>
       this.onSendEmbargoIntent(e),
     );
-    this.eventBus.on(SendSetTargetTroopRatioEvent, (e) =>
-      this.onSendSetTargetTroopRatioEvent(e),
-    );
     this.eventBus.on(BuildUnitIntentEvent, (e) => this.onBuildUnitIntent(e));
 
     this.eventBus.on(PauseGameEvent, (e) => this.onPauseGameEvent(e));
@@ -222,21 +242,25 @@ export class Transport {
     this.eventBus.on(MoveWarshipIntentEvent, (e) => {
       this.onMoveWarshipEvent(e);
     });
+
+    this.eventBus.on(SendDeleteUnitIntentEvent, (e) =>
+      this.onSendDeleteUnitIntent(e),
+    );
+
+    this.eventBus.on(SendKickPlayerIntentEvent, (e) =>
+      this.onSendKickPlayerIntent(e),
+    );
   }
 
   private startPing() {
-    if (this.isLocal || this.pingInterval) return;
-    if (this.pingInterval === null) {
-      this.pingInterval = window.setInterval(() => {
-        if (this.socket !== null && this.socket.readyState === WebSocket.OPEN) {
-          this.sendMsg(
-            JSON.stringify({
-              type: "ping",
-            } satisfies ClientPingMessage),
-          );
-        }
-      }, 5 * 1000);
-    }
+    if (this.isLocal) return;
+    this.pingInterval ??= window.setInterval(() => {
+      if (this.socket !== null && this.socket.readyState === WebSocket.OPEN) {
+        this.sendMsg({
+          type: "ping",
+        } satisfies ClientPingMessage);
+      }
+    }, 5 * 1000);
   }
 
   private stopPing() {
@@ -266,6 +290,7 @@ export class Transport {
       onconnect,
       onmessage,
       this.lobbyConfig.gameRecord !== undefined,
+      this.eventBus,
     );
     this.localServer.start();
   }
@@ -286,6 +311,10 @@ export class Transport {
     this.onmessage = onmessage;
     this.socket.onopen = () => {
       console.log("Connected to game server!");
+      if (this.socket === null) {
+        console.error("socket is null");
+        return;
+      }
       while (this.buffer.length > 0) {
         console.log("sending dropped message");
         const msg = this.buffer.pop();
@@ -293,18 +322,24 @@ export class Transport {
           console.warn("msg is undefined");
           continue;
         }
-        this.sendMsg(msg);
+        this.socket.send(msg);
       }
       onconnect();
     };
     this.socket.onmessage = (event: MessageEvent) => {
       try {
-        const serverMsg = ServerMessageSchema.parse(JSON.parse(event.data));
-        this.onmessage(serverMsg);
-      } catch (error) {
-        console.error(
-          `Failed to process server message ${event.data}: ${error}, ${error.stack}`,
-        );
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        const parsed = JSON.parse(event.data);
+        const result = ServerMessageSchema.safeParse(parsed);
+        if (!result.success) {
+          const error = z.prettifyError(result.error);
+          console.error("Error parsing server message", error);
+          return;
+        }
+        this.onmessage?.(result.data);
+      } catch (e) {
+        console.error("Error in onmessage handler:", e, event.data);
+        return;
       }
     };
     this.socket.onerror = (err) => {
@@ -316,40 +351,44 @@ export class Transport {
       console.log(
         `WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`,
       );
-      if (event.code !== 1000) {
-        console.log(`reconnecting`);
+      if (event.code === 1002) {
+        // TODO: make this a modal
+        alert(`connection refused: ${event.reason}`);
+      } else if (event.code !== 1000) {
+        console.log(`recieved error code ${event.code}, reconnecting`);
         this.reconnect();
       }
     };
   }
 
   public reconnect() {
+    if (this.onconnect === undefined) return;
+    if (this.onmessage === undefined) return;
     this.connect(this.onconnect, this.onmessage);
   }
 
   public turnComplete() {
     if (this.isLocal) {
-      this.localServer.turnComplete();
+      this.localServer?.turnComplete();
     }
   }
 
   joinGame(numTurns: number) {
-    this.sendMsg(
-      JSON.stringify({
-        type: "join",
-        gameID: this.lobbyConfig.gameID,
-        clientID: this.lobbyConfig.clientID,
-        lastTurn: numTurns,
-        token: this.lobbyConfig.token,
-        username: this.lobbyConfig.playerName,
-        flag: this.lobbyConfig.flag,
-      } satisfies ClientJoinMessage),
-    );
+    this.sendMsg({
+      type: "join",
+      gameID: this.lobbyConfig.gameID,
+      clientID: this.lobbyConfig.clientID,
+      lastTurn: numTurns,
+      token: this.lobbyConfig.token,
+      username: this.lobbyConfig.playerName,
+      flag: this.lobbyConfig.flag,
+      pattern: this.lobbyConfig.pattern,
+    } satisfies ClientJoinMessage);
   }
 
-  leaveGame(saveFullGame: boolean = false) {
+  leaveGame(saveFullGame = false) {
     if (this.isLocal) {
-      this.localServer.endGame(saveFullGame);
+      this.localServer?.endGame(saveFullGame);
       return;
     }
     this.stopPing();
@@ -392,15 +431,25 @@ export class Transport {
     });
   }
 
+  private onSendAllianceExtensionIntent(
+    event: SendAllianceExtensionIntentEvent,
+  ) {
+    this.sendIntent({
+      type: "allianceExtension",
+      clientID: this.lobbyConfig.clientID,
+      recipient: event.recipient.id(),
+    });
+  }
+
   private onSendSpawnIntentEvent(event: SendSpawnIntentEvent) {
     this.sendIntent({
       type: "spawn",
       clientID: this.lobbyConfig.clientID,
       flag: this.lobbyConfig.flag,
+      pattern: this.lobbyConfig.pattern,
       name: this.lobbyConfig.playerName,
       playerType: PlayerType.Human,
-      x: event.cell.x,
-      y: event.cell.y,
+      tile: event.tile,
     });
   }
 
@@ -419,10 +468,17 @@ export class Transport {
       clientID: this.lobbyConfig.clientID,
       targetID: event.targetID,
       troops: event.troops,
-      dstX: event.dst.x,
-      dstY: event.dst.y,
-      srcX: event.src?.x ?? null,
-      srcY: event.src?.y ?? null,
+      dst: event.dst,
+      src: event.src,
+    });
+  }
+
+  private onSendUpgradeStructureIntent(event: SendUpgradeStructureIntentEvent) {
+    this.sendIntent({
+      type: "upgrade_structure",
+      unit: event.unitType,
+      clientID: this.lobbyConfig.clientID,
+      unitId: event.unitId,
     });
   }
 
@@ -468,7 +524,7 @@ export class Transport {
       clientID: this.lobbyConfig.clientID,
       recipient: event.recipient.id(),
       quickChatKey: event.quickChatKey,
-      variables: event.variables,
+      target: event.target,
     });
   }
 
@@ -481,44 +537,34 @@ export class Transport {
     });
   }
 
-  private onSendSetTargetTroopRatioEvent(event: SendSetTargetTroopRatioEvent) {
-    this.sendIntent({
-      type: "troop_ratio",
-      clientID: this.lobbyConfig.clientID,
-      ratio: event.ratio,
-    });
-  }
-
   private onBuildUnitIntent(event: BuildUnitIntentEvent) {
     this.sendIntent({
       type: "build_unit",
       clientID: this.lobbyConfig.clientID,
       unit: event.unit,
-      x: event.cell.x,
-      y: event.cell.y,
+      tile: event.tile,
     });
   }
 
   private onPauseGameEvent(event: PauseGameEvent) {
     if (!this.isLocal) {
-      console.log(`cannot pause multiplayer games`);
+      console.log("cannot pause multiplayer games");
       return;
     }
     if (event.paused) {
-      this.localServer.pause();
+      this.localServer?.pause();
     } else {
-      this.localServer.resume();
+      this.localServer?.resume();
     }
   }
 
   private onSendWinnerEvent(event: SendWinnerEvent) {
     if (this.isLocal || this.socket?.readyState === WebSocket.OPEN) {
-      const msg = {
+      this.sendMsg({
         type: "winner",
         winner: event.winner,
         allPlayersStats: event.allPlayersStats,
-      } satisfies ClientSendWinnerMessage;
-      this.sendMsg(JSON.stringify(msg, replacer));
+      } satisfies ClientSendWinnerMessage);
     } else {
       console.log(
         "WebSocket is not open. Current state:",
@@ -530,17 +576,15 @@ export class Transport {
 
   private onSendHashEvent(event: SendHashEvent) {
     if (this.isLocal || this.socket?.readyState === WebSocket.OPEN) {
-      this.sendMsg(
-        JSON.stringify({
-          type: "hash",
-          turnNumber: event.tick,
-          hash: event.hash,
-        } satisfies ClientHashMessage),
-      );
+      this.sendMsg({
+        type: "hash",
+        turnNumber: event.tick,
+        hash: event.hash,
+      } satisfies ClientHashMessage);
     } else {
       console.log(
         "WebSocket is not open. Current state:",
-        this.socket!.readyState,
+        this.socket?.readyState,
       );
       console.log("attempting reconnect");
     }
@@ -571,13 +615,29 @@ export class Transport {
     });
   }
 
+  private onSendDeleteUnitIntent(event: SendDeleteUnitIntentEvent) {
+    this.sendIntent({
+      type: "delete_unit",
+      clientID: this.lobbyConfig.clientID,
+      unitId: event.unitId,
+    });
+  }
+
+  private onSendKickPlayerIntent(event: SendKickPlayerIntentEvent) {
+    this.sendIntent({
+      type: "kick_player",
+      clientID: this.lobbyConfig.clientID,
+      target: event.target,
+    });
+  }
+
   private sendIntent(intent: Intent) {
     if (this.isLocal || this.socket?.readyState === WebSocket.OPEN) {
       const msg = {
         type: "intent",
-        intent: intent,
+        intent,
       } satisfies ClientIntentMessage;
-      this.sendMsg(JSON.stringify(msg));
+      this.sendMsg(msg);
     } else {
       console.log(
         "WebSocket is not open. Current state:",
@@ -587,23 +647,28 @@ export class Transport {
     }
   }
 
-  private sendMsg(msg: string) {
+  private sendMsg(msg: ClientMessage) {
     if (this.isLocal) {
-      this.localServer.onMessage(msg);
-    } else {
-      if (this.socket === null) return;
-      if (
-        this.socket.readyState === WebSocket.CLOSED ||
-        this.socket.readyState === WebSocket.CLOSED
-      ) {
-        console.warn("socket not ready, closing and trying later");
-        this.socket.close();
-        this.socket = null;
+      // Forward message to local server
+      this.localServer?.onMessage(msg);
+      return;
+    } else if (this.socket === null) {
+      // Socket missing, do nothing
+      return;
+    }
+    const str = JSON.stringify(msg, replacer);
+    if (this.socket.readyState === WebSocket.CLOSED) {
+      // Buffer message
+      console.warn("socket not ready, closing and trying later");
+      this.socket.close();
+      this.socket = null;
+      if (this.onconnect && this.onmessage) {
         this.connectRemote(this.onconnect, this.onmessage);
-        this.buffer.push(msg);
-      } else {
-        this.socket.send(msg);
       }
+      this.buffer.push(str);
+    } else {
+      // Send the message directly
+      this.socket.send(str);
     }
   }
 

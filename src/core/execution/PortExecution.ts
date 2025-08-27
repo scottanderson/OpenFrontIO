@@ -1,18 +1,19 @@
 import { Execution, Game, Player, Unit, UnitType } from "../game/Game";
-import { TileRef } from "../game/GameMap";
 import { PseudoRandom } from "../PseudoRandom";
+import { TileRef } from "../game/GameMap";
 import { TradeShipExecution } from "./TradeShipExecution";
+import { TrainStationExecution } from "./TrainStationExecution";
 
 export class PortExecution implements Execution {
   private active = true;
-  private mg: Game | null = null;
+  private mg: Game | undefined;
   private port: Unit | null = null;
-  private random: PseudoRandom | null = null;
-  private checkOffset: number | null = null;
+  private random: PseudoRandom | undefined;
+  private checkOffset: number | undefined;
 
   constructor(
     private player: Player,
-    private tile: TileRef,
+    private readonly tile: TileRef,
   ) {}
 
   init(mg: Game, ticks: number): void {
@@ -22,11 +23,11 @@ export class PortExecution implements Execution {
   }
 
   tick(ticks: number): void {
-    if (this.mg === null || this.random === null || this.checkOffset === null) {
-      throw new Error("Not initialized");
-    }
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.random === undefined) throw new Error("Not initialized");
+    if (this.checkOffset === undefined) throw new Error("Not initialized");
     if (this.port === null) {
-      const tile = this.tile;
+      const { tile } = this;
       const spawn = this.player.canBuild(UnitType.Port, tile);
       if (spawn === false) {
         console.warn(
@@ -36,6 +37,7 @@ export class PortExecution implements Execution {
         return;
       }
       this.port = this.player.buildUnit(UnitType.Port, spawn, {});
+      this.createStation();
     }
 
     if (!this.port.isActive()) {
@@ -52,10 +54,7 @@ export class PortExecution implements Execution {
       return;
     }
 
-    const totalNbOfPorts = this.mg.units(UnitType.Port).length;
-    if (
-      !this.random.chance(this.mg.config().tradeShipSpawnRate(totalNbOfPorts))
-    ) {
+    if (!this.shouldSpawnTradeShip()) {
       return;
     }
 
@@ -75,5 +74,33 @@ export class PortExecution implements Execution {
 
   activeDuringSpawnPhase(): boolean {
     return false;
+  }
+
+  shouldSpawnTradeShip(): boolean {
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.random === undefined) throw new Error("Not initialized");
+    const numTradeShips = this.mg.unitCount(UnitType.TradeShip);
+    const spawnRate = this.mg.config().tradeShipSpawnRate(numTradeShips);
+    const level = this.port?.level() ?? 0;
+    for (let i = 0; i < level; i++) {
+      if (this.random.chance(spawnRate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  createStation(): void {
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.port !== null) {
+      const nearbyFactory = this.mg.hasUnitNearby(
+        this.port.tile(),
+        this.mg.config().trainStationMaxRange(),
+        UnitType.Factory,
+      );
+      if (nearbyFactory) {
+        this.mg.addExecution(new TrainStationExecution(this.port));
+      }
+    }
   }
 }

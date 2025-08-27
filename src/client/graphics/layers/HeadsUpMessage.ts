@@ -1,12 +1,12 @@
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { GameView } from "../../../core/game/GameView";
-import { translateText } from "../../Utils";
 import { Layer } from "./Layer";
+import { translateText } from "../../Utils";
 
 @customElement("heads-up-message")
 export class HeadsUpMessage extends LitElement implements Layer {
-  public game: GameView;
+  public game: GameView | undefined;
 
   @state()
   private isVisible = false;
@@ -21,6 +21,7 @@ export class HeadsUpMessage extends LitElement implements Layer {
   }
 
   tick() {
+    if (!this.game) throw new Error("Not initialzied");
     if (!this.game.inSpawnPhase()) {
       this.isVisible = false;
       this.requestUpdate();
@@ -34,11 +35,11 @@ export class HeadsUpMessage extends LitElement implements Layer {
 
     return html`
       <div
-        class="flex items-center 
-                    w-full justify-evenly h-8 lg:h-10 top-0 lg:top-4 left-0 lg:left-4 
+        class="flex items-center relative
+                    w-full justify-evenly h-8 lg:h-10 md:top-[70px] left-0 lg:left-4 
                     bg-opacity-60 bg-gray-900 rounded-md lg:rounded-lg 
                     backdrop-blur-md text-white text-md lg:text-xl p-1 lg:p-2"
-        @contextmenu=${(e) => e.preventDefault()}
+        @contextmenu=${(e: MouseEvent) => e.preventDefault()}
       >
         ${translateText("heads_up_message.choose_spawn")}
       </div>

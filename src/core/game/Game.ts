@@ -1,4 +1,4 @@
-import { Config } from "../configuration/Config";
+/* eslint-disable max-lines */
 import { AllPlayersStats, ClientID } from "../Schemas";
 import { GameMap, TileRef } from "./GameMap";
 import {
@@ -7,8 +7,10 @@ import {
   PlayerUpdate,
   UnitUpdate,
 } from "./GameUpdates";
-import { PlayerView } from "./GameView";
+import { Config } from "../configuration/Config";
+import { RailNetwork } from "./RailNetwork";
 import { Stats } from "./Stats";
+import { UnitPredicate } from "./UnitGrid";
 
 export type PlayerID = string;
 export type Tick = number;
@@ -25,10 +27,10 @@ export type GameUpdates = {
   [K in GameUpdateType]: UpdateTypeMap<K>[];
 };
 
-export interface MapPos {
+export type MapPos = {
   x: number;
   y: number;
-}
+};
 
 export enum Difficulty {
   Easy = "Easy",
@@ -40,7 +42,10 @@ export enum Difficulty {
 export type Team = string;
 
 export const Duos = "Duos" as const;
+export const Trios = "Trios" as const;
+export const Quads = "Quads" as const;
 
+/* eslint-disable sort-keys */
 export const ColoredTeams: Record<string, Team> = {
   Red: "Red",
   Blue: "Blue",
@@ -51,10 +56,11 @@ export const ColoredTeams: Record<string, Team> = {
   Green: "Green",
   Bot: "Bot",
 } as const;
+/* eslint-enable sort-keys */
 
 export enum GameMapType {
   World = "World",
-  WorldMapGiant = "Giant World Map",
+  GiantWorldMap = "Giant World Map",
   Europe = "Europe",
   EuropeClassic = "Europe Classic",
   Mena = "Mena",
@@ -66,6 +72,7 @@ export enum GameMapType {
   Pangaea = "Pangaea",
   Asia = "Asia",
   Mars = "Mars",
+  MarsRevised = "Mars Revised",
   Britannia = "Britannia",
   GatewayToTheAtlantic = "Gateway to the Atlantic",
   Australia = "Australia",
@@ -77,12 +84,19 @@ export enum GameMapType {
   FalklandIslands = "Falkland Islands",
   Baikal = "Baikal",
   Halkidiki = "Halkidiki",
+  NorthernHemisphere = "Northern Hemisphere",
+  StraitOfGibraltar = "Strait of Gibraltar",
+  Italia = "Italia",
+  Yenisei = "Yenisei",
+  Pluto = "Pluto",
 }
+
+export type GameMapName = keyof typeof GameMapType;
 
 export const mapCategories: Record<string, GameMapType[]> = {
   continental: [
     GameMapType.World,
-    GameMapType.WorldMapGiant,
+    GameMapType.GiantWorldMap,
     GameMapType.NorthAmerica,
     GameMapType.SouthAmerica,
     GameMapType.Europe,
@@ -90,6 +104,7 @@ export const mapCategories: Record<string, GameMapType[]> = {
     GameMapType.Asia,
     GameMapType.Africa,
     GameMapType.Oceania,
+    GameMapType.NorthernHemisphere,
   ],
   regional: [
     GameMapType.BlackSea,
@@ -104,9 +119,15 @@ export const mapCategories: Record<string, GameMapType[]> = {
     GameMapType.FalklandIslands,
     GameMapType.Baikal,
     GameMapType.Halkidiki,
+    GameMapType.StraitOfGibraltar,
+    GameMapType.Italia,
+    GameMapType.Yenisei,
   ],
+  // eslint-disable-next-line sort-keys
   fantasy: [
     GameMapType.Pangaea,
+    GameMapType.Pluto,
+    GameMapType.MarsRevised,
     GameMapType.Mars,
     GameMapType.DeglaciatedAntarctica,
   ],
@@ -123,14 +144,17 @@ export enum GameMode {
   Team = "Team",
 }
 
-export interface UnitInfo {
-  cost: (player: Player | PlayerView) => Gold;
+export type UnitInfo = {
+  cost: (player: Player) => Gold;
   // Determines if its owner changes when its tile is conquered.
   territoryBound: boolean;
   maxHealth?: number;
   damage?: number;
   constructionDuration?: number;
-}
+  upgradable?: boolean;
+  canBuildTrainStation?: boolean;
+  experimental?: boolean;
+};
 
 export enum UnitType {
   TransportShip = "Transport",
@@ -148,13 +172,37 @@ export enum UnitType {
   MIRV = "MIRV",
   MIRVWarhead = "MIRV Warhead",
   Construction = "Construction",
+  Train = "Train",
+  Factory = "Factory",
 }
 
-export interface OwnerComp {
+export enum TrainType {
+  Engine = "Engine",
+  Carriage = "Carriage",
+}
+
+const _structureTypes: ReadonlySet<UnitType> = new Set([
+  UnitType.City,
+  UnitType.Construction,
+  UnitType.DefensePost,
+  UnitType.SAMLauncher,
+  UnitType.MissileSilo,
+  UnitType.Port,
+]);
+
+export function isStructureType(type: UnitType): boolean {
+  return _structureTypes.has(type);
+}
+
+export type OwnerComp = {
   owner: Player;
-}
+};
 
-export interface UnitParamsMap {
+export type TrajectoryTile = {
+  tile: TileRef;
+  targetable: boolean;
+};
+export type UnitParamsMap = {
   [UnitType.TransportShip]: {
     troops?: number;
     destination?: TileRef;
@@ -164,18 +212,20 @@ export interface UnitParamsMap {
     patrolTile: TileRef;
   };
 
-  [UnitType.Shell]: {};
+  [UnitType.Shell]: Record<string, never>;
 
-  [UnitType.SAMMissile]: {};
+  [UnitType.SAMMissile]: Record<string, never>;
 
-  [UnitType.Port]: {};
+  [UnitType.Port]: Record<string, never>;
 
   [UnitType.AtomBomb]: {
     targetTile?: number;
+    trajectory: TrajectoryTile[];
   };
 
   [UnitType.HydrogenBomb]: {
     targetTile?: number;
+    trajectory: TrajectoryTile[];
   };
 
   [UnitType.TradeShip]: {
@@ -183,24 +233,30 @@ export interface UnitParamsMap {
     lastSetSafeFromPirates?: number;
   };
 
-  [UnitType.MissileSilo]: {
-    cooldownDuration?: number;
+  [UnitType.Train]: {
+    trainType: TrainType;
+    targetUnit?: Unit;
+    loaded?: boolean;
   };
 
-  [UnitType.DefensePost]: {};
+  [UnitType.Factory]: Record<string, never>;
 
-  [UnitType.SAMLauncher]: {};
+  [UnitType.MissileSilo]: Record<string, never>;
 
-  [UnitType.City]: {};
+  [UnitType.DefensePost]: Record<string, never>;
 
-  [UnitType.MIRV]: {};
+  [UnitType.SAMLauncher]: Record<string, never>;
+
+  [UnitType.City]: Record<string, never>;
+
+  [UnitType.MIRV]: Record<string, never>;
 
   [UnitType.MIRVWarhead]: {
     targetTile?: number;
   };
 
-  [UnitType.Construction]: {};
-}
+  [UnitType.Construction]: Record<string, never>;
+};
 
 // Type helper to get params type for a specific unit type
 export type UnitParams<T extends UnitType> = UnitParamsMap[T];
@@ -230,9 +286,9 @@ export class Nation {
 }
 
 export class Cell {
-  public index: number;
+  public index: number | undefined;
 
-  private strRepr: string;
+  private readonly strRepr: string;
 
   constructor(
     public readonly x: number,
@@ -267,14 +323,14 @@ export enum PlayerType {
   FakeHuman = "FAKEHUMAN",
 }
 
-export interface Execution {
+export type Execution = {
   isActive(): boolean;
   activeDuringSpawnPhase(): boolean;
   init(mg: Game, ticks: number): void;
   tick(ticks: number): void;
-}
+};
 
-export interface Attack {
+export type Attack = {
   id(): string;
   retreating(): boolean;
   retreated(): boolean;
@@ -293,33 +349,39 @@ export interface Attack {
   clearBorder(): void;
   borderSize(): number;
   averagePosition(): Cell | null;
-}
+};
 
-export interface AllianceRequest {
+export type AllianceRequest = {
   accept(): void;
   reject(): void;
   requestor(): Player;
   recipient(): Player;
   createdAt(): Tick;
-}
+  status(): "pending" | "accepted" | "rejected";
+};
 
-export interface Alliance {
+export type Alliance = {
   requestor(): Player;
   recipient(): Player;
   createdAt(): Tick;
+  expiresAt(): Tick;
   other(player: Player): Player;
-}
+};
 
-export interface MutableAlliance extends Alliance {
+export type MutableAlliance = {
   expire(): void;
   other(player: Player): Player;
-}
+  bothAgreedToExtend(): boolean;
+  addExtensionRequest(player: Player): void;
+  id(): number;
+  extend(): void;
+  onlyOneAgreedToExtend(): boolean;
+} & Alliance;
 
 export class PlayerInfo {
   public readonly clan: string | null;
 
   constructor(
-    public readonly flag: string | undefined,
     public readonly name: string,
     public readonly playerType: PlayerType,
     // null if bot.
@@ -338,11 +400,17 @@ export class PlayerInfo {
   }
 }
 
-export function isUnit(unit: Unit | UnitParams<UnitType>): unit is Unit {
-  return "isUnit" in unit && typeof unit.isUnit === "function" && unit.isUnit();
+export function isUnit(unit: unknown): unit is Unit {
+  return (
+    unit &&
+    typeof unit === "object" &&
+    "isUnit" in unit &&
+    typeof unit.isUnit === "function" &&
+    unit.isUnit()
+  );
 }
 
-export interface Unit {
+export type Unit = {
   isUnit(): this is Unit;
 
   // Common properties.
@@ -359,16 +427,28 @@ export interface Unit {
   touch(): void;
   hash(): number;
   toUpdate(): UnitUpdate;
+  hasTrainStation(): boolean;
+  setTrainStation(trainStation: boolean): void;
+
+  // Train
+  trainType(): TrainType | undefined;
+  isLoaded(): boolean | undefined;
+  setLoaded(loaded: boolean): void;
 
   // Targeting
   setTargetTile(cell: TileRef | undefined): void;
   targetTile(): TileRef | undefined;
+  setTrajectoryIndex(i: number): void;
+  trajectoryIndex(): number;
+  trajectory(): TrajectoryTile[];
   setTargetUnit(unit: Unit | undefined): void;
   targetUnit(): Unit | undefined;
   setTargetedBySAM(targeted: boolean): void;
   targetedBySAM(): boolean;
   setReachedTarget(): void;
   reachedTarget(): boolean;
+  isTargetable(): boolean;
+  setTargetable(targetable: boolean): void;
 
   // Health
   hasHealth(): boolean;
@@ -385,8 +465,9 @@ export interface Unit {
 
   // SAMs & Missile Silos
   launch(): void;
-  ticksLeftInCooldown(): Tick | undefined;
+  reloadMissile(): void;
   isInCooldown(): boolean;
+  missileTimerQueue(): number[];
 
   // Trade Ships
   setSafeFromPirates(): void; // Only for trade ships
@@ -396,25 +477,29 @@ export interface Unit {
   constructionType(): UnitType | null;
   setConstructionType(type: UnitType): void;
 
+  // Upgradable Structures
+  level(): number;
+  increaseLevel(): void;
+
   // Warships
   setPatrolTile(tile: TileRef): void;
   patrolTile(): TileRef | undefined;
-}
+};
 
-export interface TerraNullius {
+export type TerraNullius = {
   isPlayer(): false;
   id(): null;
   clientID(): ClientID;
   smallID(): number;
-}
+};
 
-export interface Embargo {
+export type Embargo = {
   createdAt: Tick;
   isTemporary: boolean;
-  target: PlayerID;
-}
+  target: Player;
+};
 
-export interface Player {
+export type Player = {
   // Basic Info
   smallID(): number;
   info(): PlayerInfo;
@@ -446,24 +531,20 @@ export interface Player {
   conquer(tile: TileRef): void;
   relinquish(tile: TileRef): void;
 
-  // Resources & Population
+  // Resources & Troops
   gold(): Gold;
-  population(): number;
-  workers(): number;
-  troops(): number;
-  targetTroopRatio(): number;
-  addGold(toAdd: Gold): void;
+  addGold(toAdd: Gold, tile?: TileRef): void;
   removeGold(toRemove: Gold): Gold;
-  addWorkers(toAdd: number): void;
-  removeWorkers(toRemove: number): void;
-  setTargetTroopRatio(target: number): void;
+  troops(): number;
   setTroops(troops: number): void;
   addTroops(troops: number): void;
   removeTroops(troops: number): number;
 
   // Units
   units(...types: UnitType[]): Unit[];
-  unitsIncludingConstruction(type: UnitType): Unit[];
+  unitCount(type: UnitType): number;
+  unitsConstructed(type: UnitType): number;
+  unitsOwned(type: UnitType): number;
   buildableUnits(tile: TileRef): BuildableUnit[];
   canBuild(type: UnitType, targetTile: TileRef): TileRef | false;
   buildUnit<T extends UnitType>(
@@ -472,6 +553,13 @@ export interface Player {
     params: UnitParams<T>,
   ): Unit;
 
+  // Returns the existing unit that can be upgraded,
+  // or false if it cannot be upgraded.
+  // New units of the same type can upgrade existing units.
+  // e.g. if a place a new city here, can it upgrade an existing city?
+  findUnitToUpgrade(type: UnitType, targetTile: TileRef): Unit | false;
+  canUpgradeUnit(unitType: UnitType): boolean;
+  upgradeUnit(unit: Unit): void;
   captureUnit(unit: Unit): void;
 
   // Relations & Diplomacy
@@ -489,6 +577,7 @@ export interface Player {
   incomingAllianceRequests(): AllianceRequest[];
   outgoingAllianceRequests(): AllianceRequest[];
   alliances(): MutableAlliance[];
+  expiredAlliances(): Alliance[];
   allies(): Player[];
   isAlliedWith(other: Player): boolean;
   allianceWith(other: Player): MutableAlliance | null;
@@ -508,17 +597,20 @@ export interface Player {
   sendEmoji(recipient: Player | typeof AllPlayers, emoji: string): void;
 
   // Donation
-  canDonate(recipient: Player): boolean;
+  canDonateGold(recipient: Player): boolean;
+  canDonateTroops(recipient: Player): boolean;
   donateTroops(recipient: Player, troops: number): boolean;
   donateGold(recipient: Player, gold: Gold): boolean;
+  canDeleteUnit(): boolean;
+  recordDeleteUnit(): void;
 
   // Embargo
   hasEmbargoAgainst(other: Player): boolean;
   tradingPartners(): Player[];
-  addEmbargo(other: PlayerID, isTemporary: boolean): void;
+  addEmbargo(other: Player, isTemporary: boolean): void;
   getEmbargoes(): Embargo[];
-  stopEmbargo(other: PlayerID): void;
-  endTemporaryEmbargo(other: PlayerID): void;
+  stopEmbargo(other: Player): void;
+  endTemporaryEmbargo(other: Player): void;
   canTrade(other: Player): boolean;
 
   // Attacking.
@@ -541,10 +633,9 @@ export interface Player {
   tradingPorts(port: Unit): Unit[];
   // WARNING: this operation is expensive.
   bestTransportShipSpawn(tile: TileRef): TileRef | false;
-}
+};
 
-export interface Game extends GameMap {
-  expireAlliance(alliance: Alliance);
+export type Game = {
   // Map & Dimensions
   isOnMap(cell: Cell): boolean;
   width(): number;
@@ -566,6 +657,10 @@ export interface Game extends GameMap {
 
   teams(): Team[];
 
+  // Alliances
+  alliances(): MutableAlliance[];
+  expireAlliance(alliance: Alliance): void;
+
   // Game State
   ticks(): Tick;
   inSpawnPhase(): boolean;
@@ -575,11 +670,19 @@ export interface Game extends GameMap {
 
   // Units
   units(...types: UnitType[]): Unit[];
+  unitCount(type: UnitType): number;
   unitInfo(type: UnitType): UnitInfo;
+  hasUnitNearby(
+    tile: TileRef,
+    searchRange: number,
+    type: UnitType,
+    playerId?: PlayerID,
+  ): boolean;
   nearbyUnits(
     tile: TileRef,
     searchRange: number,
     types: UnitType | UnitType[],
+    predicate?: UnitPredicate,
   ): Array<{ unit: Unit; distSquared: number }>;
 
   addExecution(...exec: Execution[]): void;
@@ -587,6 +690,8 @@ export interface Game extends GameMap {
     message: string,
     type: MessageType,
     playerID: PlayerID | null,
+    goldAmount?: bigint,
+    params?: Record<string, string | number>,
   ): void;
   displayIncomingUnit(
     unitID: number,
@@ -598,7 +703,7 @@ export interface Game extends GameMap {
   displayChat(
     message: string,
     category: string,
-    variables: Record<string, string>,
+    target: PlayerID | undefined,
     playerID: PlayerID | null,
     isFrom: boolean,
     recipient: string,
@@ -610,58 +715,129 @@ export interface Game extends GameMap {
   numTilesWithFallout(): number;
   // Optional as it's not initialized before the end of spawn phase
   stats(): Stats;
-}
 
-export interface PlayerActions {
+  addUpdate(update: GameUpdate): void;
+  railNetwork(): RailNetwork;
+  conquerPlayer(conqueror: Player, conquered: Player): void;
+} & GameMap;
+
+export type PlayerActions = {
   canAttack: boolean;
   buildableUnits: BuildableUnit[];
   canSendEmojiAllPlayers: boolean;
   interaction?: PlayerInteraction;
-}
+};
 
-export interface BuildableUnit {
+export type BuildableUnit = {
   canBuild: TileRef | false;
+  // unit id of the existing unit that can be upgraded, or false if it cannot be upgraded.
+  canUpgrade: number | false;
   type: UnitType;
   cost: Gold;
-}
+};
 
-export interface PlayerProfile {
+export type PlayerProfile = {
   relations: Record<number, Relation>;
   alliances: number[];
-}
+};
 
-export interface PlayerBorderTiles {
+export type PlayerBorderTiles = {
   borderTiles: ReadonlySet<TileRef>;
-}
+};
 
-export interface PlayerInteraction {
+export type PlayerInteraction = {
   sharedBorder: boolean;
   canSendEmoji: boolean;
   canSendAllianceRequest: boolean;
   canBreakAlliance: boolean;
   canTarget: boolean;
-  canDonate: boolean;
+  canDonateGold: boolean;
+  canDonateTroops: boolean;
   canEmbargo: boolean;
-  allianceCreatedAtTick?: Tick;
-}
+  allianceExpiresAt?: Tick;
+};
 
-export interface EmojiMessage {
+export type EmojiMessage = {
   message: string;
   senderID: number;
   recipientID: number | typeof AllPlayers;
   createdAt: Tick;
-}
+};
 
 export enum MessageType {
-  SUCCESS,
-  INFO,
-  WARN,
-  ERROR,
+  ATTACK_FAILED,
+  ATTACK_CANCELLED,
+  ATTACK_REQUEST,
+  CONQUERED_PLAYER,
+  MIRV_INBOUND,
+  NUKE_INBOUND,
+  HYDROGEN_BOMB_INBOUND,
+  NAVAL_INVASION_INBOUND,
+  SAM_MISS,
+  SAM_HIT,
+  CAPTURED_ENEMY_UNIT,
+  UNIT_CAPTURED_BY_ENEMY,
+  UNIT_DESTROYED,
+  ALLIANCE_ACCEPTED,
+  ALLIANCE_REJECTED,
+  ALLIANCE_REQUEST,
+  ALLIANCE_BROKEN,
+  ALLIANCE_EXPIRED,
+  SENT_GOLD_TO_PLAYER,
+  RECEIVED_GOLD_FROM_PLAYER,
+  RECEIVED_GOLD_FROM_TRADE,
+  SENT_TROOPS_TO_PLAYER,
+  RECEIVED_TROOPS_FROM_PLAYER,
   CHAT,
+  RENEW_ALLIANCE,
 }
 
-export interface NameViewData {
+// Message categories used for filtering events in the EventsDisplay
+export enum MessageCategory {
+  ATTACK = "ATTACK",
+  ALLIANCE = "ALLIANCE",
+  TRADE = "TRADE",
+  CHAT = "CHAT",
+}
+
+// Ensures that all message types are included in a category
+export const MESSAGE_TYPE_CATEGORIES: Record<MessageType, MessageCategory> = {
+  [MessageType.ATTACK_FAILED]: MessageCategory.ATTACK,
+  [MessageType.ATTACK_CANCELLED]: MessageCategory.ATTACK,
+  [MessageType.ATTACK_REQUEST]: MessageCategory.ATTACK,
+  [MessageType.CONQUERED_PLAYER]: MessageCategory.ATTACK,
+  [MessageType.MIRV_INBOUND]: MessageCategory.ATTACK,
+  [MessageType.NUKE_INBOUND]: MessageCategory.ATTACK,
+  [MessageType.HYDROGEN_BOMB_INBOUND]: MessageCategory.ATTACK,
+  [MessageType.NAVAL_INVASION_INBOUND]: MessageCategory.ATTACK,
+  [MessageType.SAM_MISS]: MessageCategory.ATTACK,
+  [MessageType.SAM_HIT]: MessageCategory.ATTACK,
+  [MessageType.CAPTURED_ENEMY_UNIT]: MessageCategory.ATTACK,
+  [MessageType.UNIT_CAPTURED_BY_ENEMY]: MessageCategory.ATTACK,
+  [MessageType.UNIT_DESTROYED]: MessageCategory.ATTACK,
+  [MessageType.ALLIANCE_ACCEPTED]: MessageCategory.ALLIANCE,
+  [MessageType.ALLIANCE_REJECTED]: MessageCategory.ALLIANCE,
+  [MessageType.ALLIANCE_REQUEST]: MessageCategory.ALLIANCE,
+  [MessageType.ALLIANCE_BROKEN]: MessageCategory.ALLIANCE,
+  [MessageType.ALLIANCE_EXPIRED]: MessageCategory.ALLIANCE,
+  [MessageType.RENEW_ALLIANCE]: MessageCategory.ALLIANCE,
+  [MessageType.SENT_GOLD_TO_PLAYER]: MessageCategory.TRADE,
+  [MessageType.RECEIVED_GOLD_FROM_PLAYER]: MessageCategory.TRADE,
+  [MessageType.RECEIVED_GOLD_FROM_TRADE]: MessageCategory.TRADE,
+  [MessageType.SENT_TROOPS_TO_PLAYER]: MessageCategory.TRADE,
+  [MessageType.RECEIVED_TROOPS_FROM_PLAYER]: MessageCategory.TRADE,
+  [MessageType.CHAT]: MessageCategory.CHAT,
+} as const;
+
+/**
+ * Get the category of a message type
+ */
+export function getMessageCategory(messageType: MessageType): MessageCategory {
+  return MESSAGE_TYPE_CATEGORIES[messageType];
+}
+
+export type NameViewData = {
   x: number;
   y: number;
   size: number;
-}
+};

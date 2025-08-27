@@ -1,19 +1,20 @@
-import { Game } from "../game/Game";
+import { AStar, AStarResult, PathFindResultType } from "./AStar";
 import { GameMap, TileRef } from "../game/GameMap";
-import { PseudoRandom } from "../PseudoRandom";
 import { DistanceBasedBezierCurve } from "../utilities/Line";
-import { AStar, PathFindResultType, TileResult } from "./AStar";
+import { Game } from "../game/Game";
 import { MiniAStar } from "./MiniAStar";
+import { PseudoRandom } from "../PseudoRandom";
 
 const parabolaMinHeight = 50;
 
 export class ParabolaPathFinder {
-  constructor(private mg: GameMap) {}
+  constructor(private readonly mg: GameMap) {}
   private curve: DistanceBasedBezierCurve | undefined;
 
   computeControlPoints(
     orig: TileRef,
     dst: TileRef,
+    increment = 3,
     distanceBasedHeight = true,
   ) {
     const p0 = { x: this.mg.x(orig), y: this.mg.y(orig) };
@@ -34,7 +35,7 @@ export class ParabolaPathFinder {
       y: Math.max(p0.y + ((p3.y - p0.y) * 3) / 4 - maxHeight, 0),
     };
 
-    this.curve = new DistanceBasedBezierCurve(p0, p1, p2, p3);
+    this.curve = new DistanceBasedBezierCurve(p0, p1, p2, p3, increment);
   }
 
   nextTile(speed: number): TileRef | true {
@@ -47,12 +48,28 @@ export class ParabolaPathFinder {
     }
     return this.mg.ref(Math.floor(nextPoint.x), Math.floor(nextPoint.y));
   }
+
+  currentIndex(): number {
+    if (!this.curve) {
+      return 0;
+    }
+    return this.curve.getCurrentIndex();
+  }
+
+  allTiles(): TileRef[] {
+    if (!this.curve) {
+      return [];
+    }
+    return this.curve
+      .getAllPoints()
+      .map((point) => this.mg.ref(Math.floor(point.x), Math.floor(point.y)));
+  }
 }
 
 export class AirPathFinder {
   constructor(
-    private mg: GameMap,
-    private random: PseudoRandom,
+    private readonly mg: GameMap,
+    private readonly random: PseudoRandom,
   ) {}
 
   nextTile(tile: TileRef, dst: TileRef): TileRef | true {
@@ -89,15 +106,20 @@ export class PathFinder {
   private curr: TileRef | null = null;
   private dst: TileRef | null = null;
   private path: TileRef[] | null = null;
-  private aStar: AStar;
+  private aStar: AStar<TileRef> | undefined;
   private computeFinished = true;
 
   private constructor(
-    private game: Game,
-    private newAStar: (curr: TileRef, dst: TileRef) => AStar,
+    private readonly game: Game,
+    private readonly newAStar: (curr: TileRef, dst: TileRef) => AStar<TileRef>,
   ) {}
 
-  public static Mini(game: Game, iterations: number, maxTries: number = 20) {
+  public static Mini(
+    game: Game,
+    iterations: number,
+    waterPath = true,
+    maxTries = 20,
+  ) {
     return new PathFinder(game, (curr: TileRef, dst: TileRef) => {
       return new MiniAStar(
         game.map(),
@@ -106,6 +128,7 @@ export class PathFinder {
         dst,
         iterations,
         maxTries,
+        waterPath,
       );
     });
   }
@@ -113,8 +136,8 @@ export class PathFinder {
   nextTile(
     curr: TileRef | null,
     dst: TileRef | null,
-    dist: number = 1,
-  ): TileResult {
+    dist = 1,
+  ): AStarResult<TileRef> {
     if (curr === null) {
       console.error("curr is null");
       return { type: PathFindResultType.PathNotFound };
@@ -125,7 +148,8 @@ export class PathFinder {
     }
 
     if (this.game.manhattanDist(curr, dst) < dist) {
-      return { type: PathFindResultType.Completed, tile: curr };
+      // eslint-disable-next-line sort-keys
+      return { type: PathFindResultType.Completed, node: curr };
     }
 
     if (this.computeFinished) {
@@ -141,11 +165,12 @@ export class PathFinder {
         if (tile === undefined) {
           throw new Error("missing tile");
         }
-        return { type: PathFindResultType.NextTile, tile };
+        // eslint-disable-next-line sort-keys
+        return { type: PathFindResultType.NextTile, node: tile };
       }
     }
 
-    switch (this.aStar.compute()) {
+    switch (this.aStar?.compute()) {
       case PathFindResultType.Completed:
         this.computeFinished = true;
         this.path = this.aStar.reconstructPath();

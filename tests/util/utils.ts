@@ -3,8 +3,8 @@
 // However buildUnit do not create executions (e.g.: WarshipExecution)
 // If you also need execution use function below. Does not work with things not
 
-import { ConstructionExecution } from "../../src/core/execution/ConstructionExecution";
 import { Game, Player, UnitType } from "../../src/core/game/Game";
+import { ConstructionExecution } from "../../src/core/execution/ConstructionExecution";
 
 // built via UI (e.g.: trade ships)
 export function constructionExecution(
@@ -15,7 +15,7 @@ export function constructionExecution(
   unit: UnitType,
   ticks = 4,
 ) {
-  game.addExecution(new ConstructionExecution(_owner, game.ref(x, y), unit));
+  game.addExecution(new ConstructionExecution(_owner, unit, game.ref(x, y)));
 
   // 4 ticks by default as it usually goes like this
   // Init of construction execution

@@ -1,9 +1,10 @@
-import DOMPurify from "dompurify";
-import { customAlphabet } from "nanoid";
-import twemoji from "twemoji";
-import { Cell, Unit } from "./game/Game";
-import { GameMap, TileRef } from "./game/GameMap";
 import {
+  BOT_NAME_PREFIXES,
+  BOT_NAME_SUFFIXES,
+} from "./execution/utils/BotNames";
+import { Cell, Unit } from "./game/Game";
+import {
+  ClientID,
   GameConfig,
   GameID,
   GameRecord,
@@ -11,11 +12,11 @@ import {
   Turn,
   Winner,
 } from "./Schemas";
-
-import {
-  BOT_NAME_PREFIXES,
-  BOT_NAME_SUFFIXES,
-} from "./execution/utils/BotNames";
+import { GameMap, TileRef } from "./game/GameMap";
+import DOMPurify from "dompurify";
+import { ID } from "./BaseSchemas";
+import { ServerConfig } from "./configuration/Config";
+import { customAlphabet } from "nanoid";
 
 export function manhattanDistWrapped(
   c1: Cell,
@@ -88,6 +89,7 @@ export function calculateBoundingBox(
     maxY = Math.max(maxY, cell.y);
   });
 
+  // eslint-disable-next-line sort-keys
   return { min: new Cell(minX, minY), max: new Cell(maxX, maxY) };
 }
 
@@ -118,7 +120,7 @@ export function getMode(list: Set<number>): number {
   // Count occurrences
   const counts = new Map<number, number>();
   for (const item of list) {
-    counts.set(item, (counts.get(item) || 0) + 1);
+    counts.set(item, (counts.get(item) ?? 0) + 1);
   }
 
   // Find the item with the highest count
@@ -138,48 +140,15 @@ export function getMode(list: Set<number>): number {
 export function sanitize(name: string): string {
   return Array.from(name)
     .join("")
-    .replace(/[^\p{L}\p{N}\s\p{Emoji}\p{Emoji_Component}\[\]_]/gu, "");
-}
-
-export function processName(name: string): string {
-  // First sanitize the raw input - strip everything except text and emojis
-  const sanitizedName = sanitize(name);
-  // Process emojis with twemoji
-  const withEmojis = twemoji.parse(sanitizedName, {
-    base: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/",
-    folder: "svg",
-    ext: ".svg",
-  });
-
-  // Add CSS styles inline to the wrapper span
-  const styledHTML = `
-        <span class="player-name" style="
-            display: inline-flex;
-            align-items: center;
-            gap: 0.25rem;
-            font-weight: 500;
-            vertical-align: middle;
-        ">
-            ${withEmojis}
-        </span>
-    `;
-
-  // Add CSS for the emoji images
-  const withEmojiStyles = styledHTML.replace(
-    /<img/g,
-    '<img style="height: 1.2em; width: 1.2em; vertical-align: -0.2em; margin: 0 0.05em 0 0.1em;"',
-  );
-
-  // Sanitize the final HTML, allowing styles and specific attributes
-  return onlyImages(withEmojiStyles);
+    .replace(/[^\p{L}\p{N}\s\p{Emoji}\p{Emoji_Component}[\]_]/gu, "");
 }
 
 export function onlyImages(html: string) {
   return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ["span", "img"],
-    ALLOWED_ATTR: ["src", "alt", "class", "style"],
-    ALLOWED_URI_REGEXP: /^https:\/\/cdn\.jsdelivr\.net\/gh\/twitter\/twemoji/,
     ADD_ATTR: ["style"],
+    ALLOWED_ATTR: ["src", "alt", "class", "style"],
+    ALLOWED_TAGS: ["span", "img"],
+    ALLOWED_URI_REGEXP: /^https:\/\/cdn\.jsdelivr\.net\/gh\/twitter\/twemoji/,
   });
 }
 
@@ -192,28 +161,33 @@ export function createGameRecord(
   start: number,
   end: number,
   winner: Winner,
+  serverConfig: ServerConfig,
 ): GameRecord {
   const duration = Math.floor((end - start) / 1000);
   const version = "v0.0.2";
-  const gitCommit = process.env.GIT_COMMIT ?? "unknown";
+  const gitCommit = serverConfig.gitCommit();
+  const subdomain = serverConfig.subdomain();
+  const domain = serverConfig.domain();
   const num_turns = allTurns.length;
   const turns = allTurns.filter(
     (t) => t.intents.length !== 0 || t.hash !== undefined,
   );
   const record: GameRecord = {
+    domain,
+    gitCommit,
     info: {
-      gameID,
       config,
+      duration,
+      end,
+      gameID,
+      num_turns,
       players,
       start,
-      end,
-      duration,
-      num_turns,
       winner,
     },
-    version,
-    gitCommit,
+    subdomain,
     turns,
+    version,
   };
   return record;
 }
@@ -225,8 +199,8 @@ export function decompressGameRecord(gameRecord: GameRecord) {
     while (lastTurnNum < turn.turnNumber - 1) {
       lastTurnNum++;
       turns.push({
-        turnNumber: lastTurnNum,
         intents: [],
+        turnNumber: lastTurnNum,
       });
     }
     turns.push(turn);
@@ -235,8 +209,8 @@ export function decompressGameRecord(gameRecord: GameRecord) {
   const turnLength = turns.length;
   for (let i = turnLength; i < gameRecord.info.num_turns; i++) {
     turns.push({
-      turnNumber: i,
       intents: [],
+      turnNumber: i,
     });
   }
   gameRecord.turns = turns;
@@ -253,6 +227,19 @@ export function generateID(): GameID {
     8,
   );
   return nanoid();
+}
+
+export function getClientID(gameID: GameID): ClientID {
+  const cachedGame = localStorage.getItem("game_id");
+  const cachedClient = localStorage.getItem("client_id");
+
+  if (gameID === cachedGame && cachedClient && ID.safeParse(cachedClient).success) return cachedClient;
+
+  const clientId = generateID();
+  localStorage.setItem("game_id", gameID);
+  localStorage.setItem("client_id", clientId);
+
+  return clientId;
 }
 
 export function toInt(num: number): bigint {
@@ -293,7 +280,7 @@ export function createRandomName(
   return randomName;
 }
 
-export const emojiTable: string[][] = [
+export const emojiTable = [
   ["😀", "😊", "🥰", "😇", "😎"],
   ["😞", "🥺", "😭", "😱", "😡"],
   ["😈", "🤡", "🖕", "🥱", "🤦‍♂️"],
@@ -305,13 +292,14 @@ export const emojiTable: string[][] = [
   ["⬅️", "🎯", "➡️", "🥈", "🥉"],
   ["↙️", "⬇️", "↘️", "❤️", "💔"],
   ["💰", "⚓", "⛵", "🏡", "🛡️"],
-];
+] as const;
 // 2d to 1d array
-export const flattenedEmojiTable: string[] = emojiTable.flat();
+export const flattenedEmojiTable = emojiTable.flat();
 
 /**
  * JSON.stringify replacer function that converts bigint values to strings.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function replacer(_key: string, value: any): any {
   return typeof value === "bigint" ? value.toString() : value;
 }

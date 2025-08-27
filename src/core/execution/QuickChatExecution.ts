@@ -1,16 +1,16 @@
 import { Execution, Game, Player, PlayerID } from "../game/Game";
 
 export class QuickChatExecution implements Execution {
-  private recipient: Player;
-  private mg: Game;
+  private recipient: Player | undefined;
+  private mg: Game | undefined;
 
   private active = true;
 
   constructor(
-    private sender: Player,
-    private recipientID: PlayerID,
-    private quickChatKey: string,
-    private variables: Record<string, string>,
+    private readonly sender: Player,
+    private readonly recipientID: PlayerID,
+    private readonly quickChatKey: string,
+    private readonly target: PlayerID | undefined,
   ) {}
 
   init(mg: Game, ticks: number): void {
@@ -27,28 +27,30 @@ export class QuickChatExecution implements Execution {
   }
 
   tick(ticks: number): void {
-    const message = this.getMessageFromKey(this.quickChatKey, this.variables);
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.recipient === undefined) throw new Error("Not initialized");
+    const message = this.getMessageFromKey(this.quickChatKey);
 
     this.mg.displayChat(
       message[1],
       message[0],
-      this.variables,
+      this.target,
       this.recipient.id(),
       true,
-      this.sender.name(),
+      this.sender.id(),
     );
 
     this.mg.displayChat(
       message[1],
       message[0],
-      this.variables,
+      this.target,
       this.sender.id(),
       false,
-      this.recipient.name(),
+      this.recipient.id(),
     );
 
     console.log(
-      `[QuickChat] ${this.sender.name} → ${this.recipient.name}: ${message}`,
+      `[QuickChat] ${this.sender.name} → ${this.recipient.displayName}: ${message}`,
     );
 
     this.active = false;
@@ -66,10 +68,7 @@ export class QuickChatExecution implements Execution {
     return false;
   }
 
-  private getMessageFromKey(
-    fullKey: string,
-    vars: Record<string, string>,
-  ): string[] {
+  private getMessageFromKey(fullKey: string): string[] {
     const translated = fullKey.split(".");
     return translated;
   }

@@ -1,21 +1,23 @@
+import { GameID, GameInfo } from "../core/Schemas";
+import { GameMapType, GameMode } from "../core/game/Game";
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { translateText } from "../client/Utils";
-import { GameMode } from "../core/game/Game";
-import { GameID, GameInfo } from "../core/Schemas";
-import { generateID } from "../core/Util";
+import { ApiPublicLobbiesResponseSchema } from "../core/ExpressSchemas";
 import { JoinLobbyEvent } from "./Main";
-import { getMapsImage } from "./utilities/Maps";
+import { getClientID } from "../core/Util";
+import { terrainMapFileLoader } from "./TerrainMapFileLoader";
+import { translateText } from "../client/Utils";
 
 @customElement("public-lobby")
 export class PublicLobby extends LitElement {
   @state() private lobbies: GameInfo[] = [];
-  @state() public isLobbyHighlighted: boolean = false;
-  @state() private isButtonDebounced: boolean = false;
+  @state() public isLobbyHighlighted = false;
+  @state() private isButtonDebounced = false;
+  @state() private readonly mapImages: Map<GameID, string> = new Map();
   private lobbiesInterval: number | null = null;
   private currLobby: GameInfo | null = null;
-  private debounceDelay: number = 750;
-  private lobbyIDToStart = new Map<GameID, number>();
+  private readonly debounceDelay = 750;
+  private readonly lobbyIDToStart = new Map<GameID, number>();
 
   createRenderRoot() {
     return this;
@@ -48,18 +50,36 @@ export class PublicLobby extends LitElement {
           const msUntilStart = l.msUntilStart ?? 0;
           this.lobbyIDToStart.set(l.gameID, msUntilStart + Date.now());
         }
+
+        // Load map image if not already loaded
+        if (l.gameConfig && !this.mapImages.has(l.gameID)) {
+          this.loadMapImage(l.gameID, l.gameConfig.gameMap);
+        }
       });
     } catch (error) {
       console.error("Error fetching lobbies:", error);
     }
   }
 
+  private async loadMapImage(gameID: GameID, gameMap: string) {
+    try {
+      // Convert string to GameMapType enum value
+      const mapType = gameMap as GameMapType;
+      const data = terrainMapFileLoader.getMapData(mapType);
+      this.mapImages.set(gameID, await data.webpPath());
+      this.requestUpdate();
+    } catch (error) {
+      console.error("Failed to load map image:", error);
+    }
+  }
+
   async fetchLobbies(): Promise<GameInfo[]> {
     try {
-      const response = await fetch(`/api/public_lobbies`);
+      const response = await fetch("/api/public_lobbies");
       if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
+      const json = await response.json();
+      const data = ApiPublicLobbiesResponseSchema.parse(json);
       return data.lobbies;
     } catch (error) {
       console.error("Error fetching lobbies:", error);
@@ -92,27 +112,34 @@ export class PublicLobby extends LitElement {
 
     const teamCount =
       lobby.gameConfig.gameMode === GameMode.Team
-        ? lobby.gameConfig.playerTeams || 0
+        ? (lobby.gameConfig.playerTeams ?? 0)
         : null;
+
+    const mapImageSrc = this.mapImages.get(lobby.gameID);
 
     return html`
       <button
         @click=${() => this.lobbyClicked(lobby)}
         ?disabled=${this.isButtonDebounced}
-        class="isolate grid h-40 grid-cols-[100%] grid-rows-[100%] place-content-stretch w-full overflow-hidden ${this
-          .isLobbyHighlighted
-          ? "bg-gradient-to-r from-green-600 to-green-500"
-          : "bg-gradient-to-r from-blue-600 to-blue-500"} text-white font-medium rounded-xl transition-opacity duration-200 hover:opacity-90 ${this
-          .isButtonDebounced
-          ? "opacity-70 cursor-not-allowed"
-          : ""}"
+        class="isolate grid h-40 grid-cols-[100%] grid-rows-[100%] place-content-stretch w-full overflow-hidden ${
+          this.isLobbyHighlighted
+            ? "bg-gradient-to-r from-green-600 to-green-500"
+            : "bg-gradient-to-r from-blue-600 to-blue-500"
+        } text-white font-medium rounded-xl transition-opacity duration-200 hover:opacity-90 ${
+          this.isButtonDebounced
+            ? "opacity-70 cursor-not-allowed"
+            : ""}"
       >
-        <img
-          src="${getMapsImage(lobby.gameConfig.gameMap)}"
-          alt="${lobby.gameConfig.gameMap}"
-          class="place-self-start col-span-full row-span-full h-full -z-10"
-          style="mask-image: linear-gradient(to left, transparent, #fff)"
-        />
+        ${mapImageSrc
+          ? html`<img
+              src="${mapImageSrc}"
+              alt="${lobby.gameConfig.gameMap}"
+              class="place-self-start col-span-full row-span-full h-full -z-10"
+              style="mask-image: linear-gradient(to left, transparent, #fff)"
+            />`
+          : html`<div
+              class="place-self-start col-span-full row-span-full h-full -z-10 bg-gray-300"
+            ></div>`}
         <div
           class="flex flex-col justify-between h-full col-span-full row-span-full p-4 md:p-6 text-right z-0"
         >
@@ -127,7 +154,11 @@ export class PublicLobby extends LitElement {
                   : "text-blue-600"} bg-white rounded-sm px-1"
               >
                 ${lobby.gameConfig.gameMode === GameMode.Team
-                  ? translateText("public_lobby.teams", { num: teamCount ?? 0 })
+                  ? typeof teamCount === "string"
+                    ? translateText(`public_lobby.teams_${teamCount}`)
+                    : translateText("public_lobby.teams", {
+                      num: teamCount ?? 0,
+                    })
                   : translateText("game_mode.ffa")}</span
               >
               <span
@@ -174,7 +205,7 @@ export class PublicLobby extends LitElement {
         new CustomEvent("join-lobby", {
           detail: {
             gameID: lobby.gameID,
-            clientID: generateID(),
+            clientID: getClientID(lobby.gameID),
           } as JoinLobbyEvent,
           bubbles: true,
           composed: true,

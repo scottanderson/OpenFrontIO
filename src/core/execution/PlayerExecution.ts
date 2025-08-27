@@ -1,19 +1,18 @@
-import { renderNumber } from "../../client/Utils";
-import { Config } from "../configuration/Config";
-import { Execution, Game, MessageType, Player, UnitType } from "../game/Game";
-import { GameImpl } from "../game/GameImpl";
-import { TileRef } from "../game/GameMap";
+import { Execution, Game, Player, UnitType } from "../game/Game";
+import { GameMap, TileRef } from "../game/GameMap";
 import { calculateBoundingBox, getMode, inscribed, simpleHash } from "../Util";
+import { Config } from "../configuration/Config";
+import { GameImpl } from "../game/GameImpl";
 
 export class PlayerExecution implements Execution {
   private readonly ticksPerClusterCalc = 20;
 
-  private config: Config;
+  private config: Config | undefined;
   private lastCalc = 0;
-  private mg: Game;
+  private mg: Game | undefined;
   private active = true;
 
-  constructor(private player: Player) {}
+  constructor(private readonly player: Player) {}
 
   activeDuringSpawnPhase(): boolean {
     return false;
@@ -27,13 +26,15 @@ export class PlayerExecution implements Execution {
   }
 
   tick(ticks: number) {
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.config === undefined) throw new Error("Not initialized");
     this.player.decayRelations();
     this.player.units().forEach((u) => {
-      const tileOwner = this.mg!.owner(u.tile());
+      const tileOwner = this.mg?.owner(u.tile());
       if (u.info().territoryBound) {
-        if (tileOwner.isPlayer()) {
+        if (tileOwner?.isPlayer()) {
           if (tileOwner !== this.player) {
-            this.mg!.player(tileOwner.id()).captureUnit(u);
+            this.mg?.player(tileOwner.id()).captureUnit(u);
           }
         } else {
           u.delete();
@@ -42,7 +43,9 @@ export class PlayerExecution implements Execution {
     });
 
     if (!this.player.isAlive()) {
-      // Player has no tiles, delete any remaining units
+      // Player has no tiles, delete any remaining units and gold
+      const gold = this.player.gold();
+      this.player.removeGold(gold);
       this.player.units().forEach((u) => {
         if (
           u.type() !== UnitType.AtomBomb &&
@@ -57,25 +60,17 @@ export class PlayerExecution implements Execution {
       return;
     }
 
-    const popInc = this.config.populationIncreaseRate(this.player);
-    this.player.addWorkers(popInc * (1 - this.player.targetTroopRatio()));
-    this.player.addTroops(popInc * this.player.targetTroopRatio());
+    const troopInc = this.config.troopIncreaseRate(this.player);
+    this.player.addTroops(troopInc);
     const goldFromWorkers = this.config.goldAdditionRate(this.player);
     this.player.addGold(goldFromWorkers);
 
     // Record stats
     this.mg.stats().goldWork(this.player, goldFromWorkers);
 
-    const adjustRate = this.config.troopAdjustmentRate(this.player);
-    this.player.addTroops(adjustRate);
-    this.player.removeWorkers(adjustRate);
-
     const alliances = Array.from(this.player.alliances());
     for (const alliance of alliances) {
-      if (
-        this.mg.ticks() - alliance.createdAt() >
-        this.mg.config().allianceDuration()
-      ) {
+      if (alliance.expiresAt() <= this.mg.ticks()) {
         alliance.expire();
       }
     }
@@ -105,6 +100,7 @@ export class PlayerExecution implements Execution {
   }
 
   private removeClusters() {
+    if (this.mg === undefined) throw new Error("Not initialized");
     const clusters = this.calculateClusters();
     clusters.sort((a, b) => b.size - a.size);
 
@@ -124,6 +120,7 @@ export class PlayerExecution implements Execution {
   }
 
   private surroundedBySamePlayer(cluster: Set<TileRef>): false | Player {
+    if (this.mg === undefined) throw new Error("Not initialized");
     const enemies = new Set<number>();
     for (const tile of cluster) {
       const isOceanShore = this.mg.isOceanShore(tile);
@@ -158,6 +155,7 @@ export class PlayerExecution implements Execution {
   }
 
   private isSurrounded(cluster: Set<TileRef>): boolean {
+    if (this.mg === undefined) throw new Error("Not initialized");
     const enemyTiles = new Set<TileRef>();
     for (const tr of cluster) {
       if (this.mg.isShore(tr) || this.mg.isOnEdgeOfMap(tr)) {
@@ -181,6 +179,7 @@ export class PlayerExecution implements Execution {
   }
 
   private removeCluster(cluster: Set<TileRef>) {
+    if (this.mg === undefined) throw new Error("Not initialized");
     if (
       Array.from(cluster).some(
         (t) => this.mg?.ownerID(t) !== this.player?.smallID(),
@@ -197,24 +196,16 @@ export class PlayerExecution implements Execution {
     }
 
     const firstTile = cluster.values().next().value;
-    const filter = (_, t: TileRef): boolean =>
+    if (!firstTile) {
+      return;
+    }
+
+    const filter = (_: GameMap, t: TileRef): boolean =>
       this.mg?.ownerID(t) === this.player?.smallID();
     const tiles = this.mg.bfs(firstTile, filter);
 
     if (this.player.numTilesOwned() === tiles.size) {
-      const gold = this.player.gold();
-      this.mg.displayMessage(
-        `Conquered ${this.player.displayName()} received ${renderNumber(
-          gold,
-        )} gold`,
-        MessageType.SUCCESS,
-        capturing.id(),
-      );
-      capturing.addGold(gold);
-      this.player.removeGold(gold);
-
-      // Record stats
-      this.mg.stats().goldWar(capturing, this.player, gold);
+      this.mg.conquerPlayer(capturing, this.player);
     }
 
     for (const tile of tiles) {
@@ -223,6 +214,7 @@ export class PlayerExecution implements Execution {
   }
 
   private getCapturingPlayer(cluster: Set<TileRef>): Player | null {
+    if (this.mg === undefined) throw new Error("Not initialized");
     const neighborsIDs = new Set<number>();
     for (const t of cluster) {
       for (const neighbor of this.mg.neighbors(t)) {
@@ -233,7 +225,7 @@ export class PlayerExecution implements Execution {
     }
 
     let largestNeighborAttack: Player | null = null;
-    let largestTroopCount: number = 0;
+    let largestTroopCount = 0;
     for (const id of neighborsIDs) {
       const neighbor = this.mg.playerBySmallID(id);
       if (!neighbor.isPlayer() || this.player.isFriendly(neighbor)) {

@@ -1,8 +1,8 @@
-import { UnitInfo, UnitType } from "../game/Game";
-import { UserSettings } from "../game/UserSettings";
-import { GameConfig } from "../Schemas";
-import { GameEnv, ServerConfig } from "./Config";
 import { DefaultConfig, DefaultServerConfig } from "./DefaultConfig";
+import { GameEnv, ServerConfig } from "./Config";
+import { UnitInfo, UnitType } from "../game/Game";
+import { GameConfig } from "../Schemas";
+import { UserSettings } from "../game/UserSettings";
 
 export class DevServerConfig extends DefaultServerConfig {
   adminToken(): string {
@@ -15,10 +15,6 @@ export class DevServerConfig extends DefaultServerConfig {
 
   gameCreationRate(): number {
     return 5 * 1000;
-  }
-
-  lobbyMaxPlayers(): number {
-    return Math.random() < 0.5 ? 2 : 3;
   }
 
   samWarheadHittingChance(): number {
@@ -37,6 +33,14 @@ export class DevServerConfig extends DefaultServerConfig {
   }
   gitCommit(): string {
     return "DEV";
+  }
+
+  domain(): string {
+    return "localhost";
+  }
+
+  subdomain(): string {
+    return "";
   }
 }
 
@@ -68,10 +72,6 @@ export class DevConfig extends DefaultConfig {
 
   // percentageTilesOwnedToWin(): number {
   //     return 1
-  // }
-
-  // populationIncreaseRate(player: Player): number {
-  //     return this.maxPopulation(player)
   // }
 
   // boatMaxDistance(): number {

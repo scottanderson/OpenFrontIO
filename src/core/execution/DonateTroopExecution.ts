@@ -1,13 +1,13 @@
 import { Execution, Game, Player, PlayerID } from "../game/Game";
 
 export class DonateTroopsExecution implements Execution {
-  private recipient: Player;
+  private recipient: Player | undefined;
 
   private active = true;
 
   constructor(
-    private sender: Player,
-    private recipientID: PlayerID,
+    private readonly sender: Player,
+    private readonly recipientID: PlayerID,
     private troops: number | null,
   ) {}
 
@@ -19,18 +19,17 @@ export class DonateTroopsExecution implements Execution {
     }
 
     this.recipient = mg.player(this.recipientID);
-    if (this.troops === null) {
-      this.troops = mg.config().defaultDonationAmount(this.sender);
-    }
+    this.troops ??= mg.config().defaultDonationAmount(this.sender);
     const maxDonation =
-      mg.config().maxPopulation(this.recipient) - this.recipient.population();
+      mg.config().maxTroops(this.recipient) - this.recipient.troops();
     this.troops = Math.min(this.troops, maxDonation);
   }
 
   tick(ticks: number): void {
-    if (this.troops === null) throw new Error("not initialized");
+    if (this.troops === null) throw new Error("Not initialized");
+    if (this.recipient === undefined) throw new Error("Not initialized");
     if (
-      this.sender.canDonate(this.recipient) &&
+      this.sender.canDonateTroops(this.recipient) &&
       this.sender.donateTroops(this.recipient, this.troops)
     ) {
       this.recipient.updateRelation(this.sender, 50);

@@ -1,52 +1,44 @@
-import { LitElement } from "lit";
-import { customElement } from "lit/decorators.js";
-import { EventBus } from "../../../core/EventBus";
-import { PlayerActions, UnitType } from "../../../core/game/Game";
-import { TileRef } from "../../../core/game/GameMap";
-import { GameView, PlayerView } from "../../../core/game/GameView";
-import { TransformHandler } from "../TransformHandler";
-import { UIState } from "../UIState";
-import { BuildMenu } from "./BuildMenu";
-import { ChatIntegration } from "./ChatIntegration";
-import { EmojiTable } from "./EmojiTable";
-import { Layer } from "./Layer";
-import { MenuEventManager } from "./MenuEventManager";
-import { PlayerActionHandler } from "./PlayerActionHandler";
-import { PlayerInfoOverlay } from "./PlayerInfoOverlay";
-import { PlayerPanel } from "./PlayerPanel";
-import { RadialMenu, RadialMenuConfig } from "./RadialMenu";
 import {
   COLORS,
   MenuElementParams,
-  rootMenuItems,
-  Slot,
+  centerButtonElement,
+  rootMenuElement,
 } from "./RadialMenuElements";
-
-import boatIcon from "../../../../resources/images/BoatIconWhite.svg";
-import buildIcon from "../../../../resources/images/BuildIconWhite.svg";
-import infoIcon from "../../../../resources/images/InfoIcon.svg";
+import { GameView, PlayerView } from "../../../core/game/GameView";
+import { RadialMenu, RadialMenuConfig } from "./RadialMenu";
+import { BuildMenu } from "./BuildMenu";
+import { ChatIntegration } from "./ChatIntegration";
+import { ContextMenuEvent } from "../../InputHandler";
+import { EmojiTable } from "./EmojiTable";
+import { EventBus } from "../../../core/EventBus";
+import { Layer } from "./Layer";
+import { LitElement } from "lit";
+import { PlayerActionHandler } from "./PlayerActionHandler";
+import { PlayerActions } from "../../../core/game/Game";
+import { PlayerPanel } from "./PlayerPanel";
+import { TileRef } from "../../../core/game/GameMap";
+import { TransformHandler } from "../TransformHandler";
+import { UIState } from "../UIState";
+import { customElement } from "lit/decorators.js";
 import swordIcon from "../../../../resources/images/SwordIconWhite.svg";
 
 @customElement("main-radial-menu")
 export class MainRadialMenu extends LitElement implements Layer {
-  private radialMenu: RadialMenu;
-  private lastTickRefresh: number = 0;
-  private tickRefreshInterval: number = 500;
-  private needsRefresh: boolean = false;
+  private readonly radialMenu: RadialMenu;
 
-  private playerActionHandler: PlayerActionHandler;
-  private menuEventManager: MenuEventManager;
-  private chatIntegration: ChatIntegration;
+  private readonly playerActionHandler: PlayerActionHandler;
+  private readonly chatIntegration: ChatIntegration;
+
+  private clickedTile: TileRef | null = null;
 
   constructor(
-    private eventBus: EventBus,
-    private game: GameView,
-    private transformHandler: TransformHandler,
-    private emojiTable: EmojiTable,
-    private buildMenu: BuildMenu,
-    private uiState: UIState,
-    private playerInfoOverlay: PlayerInfoOverlay,
-    private playerPanel: PlayerPanel,
+    private readonly eventBus: EventBus,
+    private readonly game: GameView,
+    private readonly transformHandler: TransformHandler,
+    private readonly emojiTable: EmojiTable,
+    private readonly buildMenu: BuildMenu,
+    private readonly uiState: UIState,
+    private readonly playerPanel: PlayerPanel,
   ) {
     super();
 
@@ -63,48 +55,65 @@ export class MainRadialMenu extends LitElement implements Layer {
       `,
     };
 
-    this.radialMenu = new RadialMenu(menuConfig);
+    this.radialMenu = new RadialMenu(
+      this.eventBus,
+      rootMenuElement,
+      centerButtonElement,
+      menuConfig,
+    );
 
     this.playerActionHandler = new PlayerActionHandler(
       this.eventBus,
       this.uiState,
     );
 
-    this.menuEventManager = new MenuEventManager(
-      this.eventBus,
-      this.game,
-      this.transformHandler,
-      this.radialMenu,
-      this.buildMenu,
-      this.emojiTable,
-      this.playerInfoOverlay,
-      this.playerPanel,
-    );
-
     this.chatIntegration = new ChatIntegration(this.game, this.eventBus);
-
-    this.radialMenu.setRootMenuItems(rootMenuItems);
   }
 
   init() {
     this.radialMenu.init();
-
-    this.menuEventManager.setContextMenuCallback((myPlayer, tile, actions) => {
-      this.handlePlayerActions(myPlayer, actions, tile);
+    this.eventBus.on(ContextMenuEvent, async (event) => {
+      const worldCoords = this.transformHandler.screenToWorldCoordinates(
+        event.x,
+        event.y,
+      );
+      if (!this.game.isValidCoord(worldCoords.x, worldCoords.y)) {
+        return;
+      }
+      const myPlayer = this.game.myPlayer();
+      if (myPlayer === null) {
+        return;
+      }
+      const tile = this.game.ref(worldCoords.x, worldCoords.y);
+      this.clickedTile = tile;
+      try {
+        const actions = await myPlayer.actions(tile);
+        // Stale check: user might have clicked somewhere else already
+        if (this.clickedTile !== tile) return;
+        this.updatePlayerActions(
+          myPlayer,
+          actions,
+          tile,
+          event.x,
+          event.y,
+        );
+      } catch (err) {
+        console.error("Failed to fetch player actions:", err);
+      }
     });
-
-    this.menuEventManager.init();
   }
 
-  private async handlePlayerActions(
+  private async updatePlayerActions(
     myPlayer: PlayerView,
     actions: PlayerActions,
     tile: TileRef,
+    screenX: number | null = null,
+    screenY: number | null = null,
   ) {
     this.buildMenu.playerActions = actions;
 
     const tileOwner = this.game.owner(tile);
-    const recipient = tileOwner.isPlayer() ? (tileOwner as PlayerView) : null;
+    const recipient = tileOwner.isPlayer() ? tileOwner : null;
 
     if (myPlayer && recipient) {
       this.chatIntegration.setupChatModal(myPlayer, recipient);
@@ -113,7 +122,6 @@ export class MainRadialMenu extends LitElement implements Layer {
     const params: MenuElementParams = {
       myPlayer,
       selected: recipient,
-      tileOwner,
       tile,
       playerActions: actions,
       game: this.game,
@@ -122,150 +130,37 @@ export class MainRadialMenu extends LitElement implements Layer {
       playerActionHandler: this.playerActionHandler,
       playerPanel: this.playerPanel,
       chatIntegration: this.chatIntegration,
-      closeMenu: () => this.menuEventManager.closeMenu(),
+      closeMenu: () => this.closeMenu(),
+      eventBus: this.eventBus,
     };
 
-    this.radialMenu.setRootMenuItems(rootMenuItems);
     this.radialMenu.setParams(params);
-
-    updateCenterButton(params, (enabled, action) => {
-      this.radialMenu.enableCenterButton(enabled, action);
-    });
+    if (screenX !== null && screenY !== null) {
+      this.radialMenu.showRadialMenu(screenX, screenY);
+    } else {
+      this.radialMenu.refresh();
+    }
   }
 
   async tick() {
-    const clickedCell = this.menuEventManager.getClickedCell();
-    if (!this.radialMenu.isMenuVisible() || clickedCell === null) return;
-
-    const currentTime = new Date().getTime();
-    if (
-      currentTime - this.lastTickRefresh < this.tickRefreshInterval &&
-      !this.needsRefresh
-    ) {
-      return;
-    }
-
-    const myPlayer = this.game.myPlayer();
-    if (myPlayer === null || !myPlayer.isAlive()) return;
-
-    const tile = this.game.ref(clickedCell.x, clickedCell.y);
-
-    const isSpawnPhase = this.game.inSpawnPhase();
-    const wasInSpawnPhase = this.menuEventManager.getWasInSpawnPhase();
-
-    if (wasInSpawnPhase !== isSpawnPhase) {
-      if (wasInSpawnPhase && !isSpawnPhase) {
-        this.needsRefresh = true;
-        this.menuEventManager.setWasInSpawnPhase(isSpawnPhase);
-
-        const actions = await this.playerActionHandler.getPlayerActions(
+    if (!this.radialMenu.isMenuVisible() || this.clickedTile === null) return;
+    if (this.game.ticks() % 5 === 0) {
+      const myPlayer = this.game.myPlayer();
+      if (myPlayer === null) return;
+      const tile = this.clickedTile;
+      if (tile === null) return;
+      try {
+        const actions = await myPlayer.actions(tile);
+        if (this.clickedTile !== tile) return; // stale
+        this.updatePlayerActions(
           myPlayer,
+          actions,
           tile,
         );
-        this.updateMenuState(myPlayer, actions, tile);
-        this.radialMenu.refreshMenu();
-        return;
-      }
-
-      this.menuEventManager.closeMenu();
-      return;
-    }
-
-    // Check if tile ownership has changed
-    const originalTileOwner = this.menuEventManager.getOriginalTileOwner();
-    if (originalTileOwner && originalTileOwner.isPlayer()) {
-      if (this.game.owner(tile) !== originalTileOwner) {
-        this.menuEventManager.closeMenu();
-        return;
-      }
-    } else if (originalTileOwner) {
-      if (
-        this.game.owner(tile).isPlayer() ||
-        this.game.owner(tile) === myPlayer
-      ) {
-        this.menuEventManager.closeMenu();
-        return;
+      } catch (err) {
+        console.error("Failed to refresh player actions:", err);
       }
     }
-
-    this.lastTickRefresh = currentTime;
-    this.needsRefresh = false;
-
-    const actions = await this.playerActionHandler.getPlayerActions(
-      myPlayer,
-      tile,
-    );
-    this.updateMenuState(myPlayer, actions, tile);
-  }
-
-  private updateMenuState(
-    myPlayer: PlayerView,
-    actions: PlayerActions,
-    tile: TileRef,
-  ) {
-    if (!this.radialMenu.isMenuVisible()) return;
-
-    const tileOwner = this.game.owner(tile);
-    const recipient = tileOwner.isPlayer() ? (tileOwner as PlayerView) : null;
-
-    const params: MenuElementParams = {
-      myPlayer,
-      selected: recipient,
-      tileOwner,
-      tile,
-      playerActions: actions,
-      game: this.game,
-      buildMenu: this.buildMenu,
-      emojiTable: this.emojiTable,
-      playerActionHandler: this.playerActionHandler,
-      playerPanel: this.playerPanel,
-      chatIntegration: this.chatIntegration,
-      closeMenu: () => this.menuEventManager.closeMenu(),
-    };
-
-    if (this.radialMenu.getCurrentLevel() === 0) {
-      updateCenterButton(params, (enabled, action) => {
-        this.radialMenu.enableCenterButton(enabled, action);
-      });
-    }
-
-    const canBuildTransport = actions.buildableUnits.find(
-      (bu) => bu.type === UnitType.TransportShip,
-    )?.canBuild;
-
-    this.radialMenu.updateMenuItem(
-      Slot.Build,
-      !this.game.inSpawnPhase(),
-      COLORS.build,
-      buildIcon,
-    );
-
-    if (actions?.interaction?.canSendAllianceRequest) {
-      this.radialMenu.updateMenuItem(Slot.Ally, true, COLORS.ally, undefined);
-    } else if (actions?.interaction?.canBreakAlliance) {
-      this.radialMenu.updateMenuItem(
-        Slot.Ally,
-        true,
-        COLORS.breakAlly,
-        undefined,
-      );
-    } else {
-      this.radialMenu.updateMenuItem(Slot.Ally, false, undefined, undefined);
-    }
-
-    this.radialMenu.updateMenuItem(
-      Slot.Boat,
-      !!canBuildTransport,
-      COLORS.boat,
-      boatIcon,
-    );
-
-    this.radialMenu.updateMenuItem(
-      Slot.Info,
-      this.game.hasOwner(tile),
-      COLORS.info,
-      infoIcon,
-    );
   }
 
   renderLayer(context: CanvasRenderingContext2D) {
@@ -276,26 +171,21 @@ export class MainRadialMenu extends LitElement implements Layer {
     return this.radialMenu.shouldTransform();
   }
 
-  redraw() {
-    // No redraw implementation needed
-  }
-}
+  closeMenu() {
+    if (this.radialMenu.isMenuVisible()) {
+      this.radialMenu.hideRadialMenu();
+    }
 
-function updateCenterButton(
-  params: MenuElementParams,
-  enableCenterButton: (enabled: boolean, action?: (() => void) | null) => void,
-) {
-  if (params.playerActions.canAttack) {
-    enableCenterButton(true, () => {
-      if (params.tileOwner !== params.myPlayer) {
-        params.playerActionHandler.handleAttack(
-          params.myPlayer,
-          params.tileOwner.id(),
-        );
-      }
-      params.closeMenu();
-    });
-  } else {
-    enableCenterButton(false);
+    if (this.buildMenu.isVisible) {
+      this.buildMenu.hideMenu();
+    }
+
+    if (this.emojiTable.isVisible) {
+      this.emojiTable.hideTable();
+    }
+
+    if (this.playerPanel.isVisible) {
+      this.playerPanel.hide();
+    }
   }
 }

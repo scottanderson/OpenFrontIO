@@ -1,18 +1,10 @@
-import { EventBus } from "../../../core/EventBus";
+import { PlayerActions, PlayerID } from "../../../core/game/Game";
 import {
-  Cell,
-  PlayerActions,
-  PlayerID,
-  UnitType,
-} from "../../../core/game/Game";
-import { TileRef } from "../../../core/game/GameMap";
-import { PlayerView } from "../../../core/game/GameView";
-import {
-  BuildUnitIntentEvent,
   SendAllianceRequestIntentEvent,
   SendAttackIntentEvent,
   SendBoatAttackIntentEvent,
   SendBreakAllianceIntentEvent,
+  SendDeleteUnitIntentEvent,
   SendDonateGoldIntentEvent,
   SendDonateTroopsIntentEvent,
   SendEmbargoIntentEvent,
@@ -21,12 +13,15 @@ import {
   SendSpawnIntentEvent,
   SendTargetPlayerIntentEvent,
 } from "../../Transport";
+import { EventBus } from "../../../core/EventBus";
+import { PlayerView } from "../../../core/game/GameView";
+import { TileRef } from "../../../core/game/GameMap";
 import { UIState } from "../UIState";
 
 export class PlayerActionHandler {
   constructor(
-    private eventBus: EventBus,
-    private uiState: UIState,
+    private readonly eventBus: EventBus,
+    private readonly uiState: UIState,
   ) {}
 
   async getPlayerActions(
@@ -48,13 +43,13 @@ export class PlayerActionHandler {
   handleBoatAttack(
     player: PlayerView,
     targetId: PlayerID | null,
-    targetCell: Cell,
-    spawnTile: Cell | null,
+    targetTile: TileRef,
+    spawnTile: TileRef | null,
   ) {
     this.eventBus.emit(
       new SendBoatAttackIntentEvent(
         targetId,
-        targetCell,
+        targetTile,
         this.uiState.attackRatio * player.troops(),
         spawnTile,
       ),
@@ -68,14 +63,8 @@ export class PlayerActionHandler {
     return await player.bestTransportShipSpawn(tile);
   }
 
-  handleBuildUnit(unitType: UnitType, cellX: number, cellY: number) {
-    this.eventBus.emit(
-      new BuildUnitIntentEvent(unitType, new Cell(cellX, cellY)),
-    );
-  }
-
-  handleSpawn(spawnCell: Cell) {
-    this.eventBus.emit(new SendSpawnIntentEvent(spawnCell));
+  handleSpawn(tile: TileRef) {
+    this.eventBus.emit(new SendSpawnIntentEvent(tile));
   }
 
   handleAllianceRequest(player: PlayerView, recipient: PlayerView) {
@@ -108,7 +97,11 @@ export class PlayerActionHandler {
     this.eventBus.emit(new SendEmojiIntentEvent(targetPlayer, emojiIndex));
   }
 
-  handleQuickChat(recipient: PlayerView, chatKey: string, params: any = {}) {
-    this.eventBus.emit(new SendQuickChatEvent(recipient, chatKey, params));
+  handleQuickChat(recipient: PlayerView, chatKey: string, target?: PlayerID) {
+    this.eventBus.emit(new SendQuickChatEvent(recipient, chatKey, target));
+  }
+
+  handleDeleteUnit(unitId: number) {
+    this.eventBus.emit(new SendDeleteUnitIntentEvent(unitId));
   }
 }

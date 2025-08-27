@@ -1,5 +1,11 @@
-import { translateText } from "../client/Utils";
-import { EventBus } from "../core/EventBus";
+import {
+  AutoUpgradeEvent,
+  DoBoatAttackEvent,
+  DoGroundAttackEvent,
+  InputHandler,
+  MouseMoveEvent,
+  MouseUpEvent,
+} from "./InputHandler";
 import {
   ClientID,
   GameID,
@@ -7,13 +13,7 @@ import {
   GameStartInfo,
   PlayerRecord,
   ServerMessage,
-  Winner,
 } from "../core/Schemas";
-import { createGameRecord } from "../core/Util";
-import { ServerConfig } from "../core/configuration/Config";
-import { getConfig } from "../core/configuration/ConfigLoader";
-import { Cell, PlayerActions, UnitType } from "../core/game/Game";
-import { TileRef } from "../core/game/GameMap";
 import {
   ErrorUpdate,
   GameUpdateType,
@@ -21,30 +21,35 @@ import {
   HashUpdate,
   WinUpdate,
 } from "../core/game/GameUpdates";
+import { GameRenderer, createRenderer } from "./graphics/GameRenderer";
 import { GameView, PlayerView } from "../core/game/GameView";
-import { loadTerrainMap, TerrainMapData } from "../core/game/TerrainMapLoader";
-import { UserSettings } from "../core/game/UserSettings";
-import { WorkerClient } from "../core/worker/WorkerClient";
-import {
-  DoBoatAttackEvent,
-  InputHandler,
-  MouseMoveEvent,
-  MouseUpEvent,
-} from "./InputHandler";
-import { endGame, startGame, startTime } from "./LocalPersistantStats";
-import { getPersistentID } from "./Main";
+import { PlayerActions, UnitType } from "../core/game/Game";
 import {
   SendAttackIntentEvent,
   SendBoatAttackIntentEvent,
   SendHashEvent,
   SendSpawnIntentEvent,
+  SendUpgradeStructureIntentEvent,
   Transport,
 } from "./Transport";
+import { TerrainMapData, loadTerrainMap } from "../core/game/TerrainMapLoader";
+import { endGame, startGame, startTime } from "./LocalPersistantStats";
+import { EventBus } from "../core/EventBus";
+import { GameMapLoader } from "../core/game/GameMapLoader";
+import { ServerConfig } from "../core/configuration/Config";
+import { TileRef } from "../core/game/GameMap";
+import { UserSettings } from "../core/game/UserSettings";
+import { WorkerClient } from "../core/worker/WorkerClient";
 import { createCanvas } from "./Utils";
-import { createRenderer, GameRenderer } from "./graphics/GameRenderer";
+import { createGameRecord } from "../core/Util";
+import { getConfig } from "../core/configuration/ConfigLoader";
+import { getPersistentID } from "./Main";
+import { terrainMapFileLoader } from "./TerrainMapFileLoader";
+import { translateText } from "../client/Utils";
 
-export interface LobbyConfig {
+export type LobbyConfig = {
   serverConfig: ServerConfig;
+  pattern: string | undefined;
   flag: string;
   playerName: string;
   clientID: ClientID;
@@ -54,15 +59,14 @@ export interface LobbyConfig {
   gameStartInfo?: GameStartInfo;
   // GameRecord exists when replaying an archived game.
   gameRecord?: GameRecord;
-}
+};
 
 export function joinLobby(
+  eventBus: EventBus,
   lobbyConfig: LobbyConfig,
   onPrestart: () => void,
   onJoin: () => void,
 ): () => void {
-  const eventBus = new EventBus();
-
   console.log(
     `joining lobby: gameID: ${lobbyConfig.gameID}, clientID: ${lobbyConfig.clientID}`,
   );
@@ -81,7 +85,7 @@ export function joinLobby(
   const onmessage = (message: ServerMessage) => {
     if (message.type === "prestart") {
       console.log(`lobby: game prestarting: ${JSON.stringify(message)}`);
-      terrainLoad = loadTerrainMap(message.gameMap);
+      terrainLoad = loadTerrainMap(message.gameMap, terrainMapFileLoader);
       onPrestart();
     }
     if (message.type === "start") {
@@ -97,7 +101,19 @@ export function joinLobby(
         transport,
         userSettings,
         terrainLoad,
+        terrainMapFileLoader,
       ).then((r) => r.start());
+    }
+    if (message.type === "error") {
+      showErrorModal(
+        message.error,
+        message.message,
+        lobbyConfig.gameID,
+        lobbyConfig.clientID,
+        true,
+        false,
+        "error_modal.connection_error",
+      );
     }
   };
   transport.connect(onconnect, onmessage);
@@ -107,12 +123,13 @@ export function joinLobby(
   };
 }
 
-export async function createClientGame(
+async function createClientGame(
   lobbyConfig: LobbyConfig,
   eventBus: EventBus,
   transport: Transport,
   userSettings: UserSettings,
   terrainLoad: Promise<TerrainMapData> | null,
+  mapLoader: GameMapLoader,
 ): Promise<ClientGameRunner> {
   if (lobbyConfig.gameStartInfo === undefined) {
     throw new Error("missing gameStartInfo");
@@ -127,7 +144,10 @@ export async function createClientGame(
   if (terrainLoad) {
     gameMap = await terrainLoad;
   } else {
-    gameMap = await loadTerrainMap(lobbyConfig.gameStartInfo.config.gameMap);
+    gameMap = await loadTerrainMap(
+      lobbyConfig.gameStartInfo.config.gameMap,
+      mapLoader,
+    );
   }
   const worker = new WorkerClient(
     lobbyConfig.gameStartInfo,
@@ -137,9 +157,10 @@ export async function createClientGame(
   const gameView = new GameView(
     worker,
     config,
-    gameMap.gameMap,
+    gameMap,
     lobbyConfig.clientID,
     lobbyConfig.gameStartInfo.gameID,
+    lobbyConfig.gameStartInfo.players,
   );
 
   console.log("going to init path finder");
@@ -171,26 +192,19 @@ export class ClientGameRunner {
 
   private lastMousePosition: { x: number; y: number } | null = null;
 
-  private lastMessageTime: number = 0;
-  private connectionCheckInterval: NodeJS.Timeout | null = null;
+  private lastMessageTime = 0;
+  private connectionCheckInterval: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
-    private lobby: LobbyConfig,
-    private eventBus: EventBus,
-    private renderer: GameRenderer,
-    private input: InputHandler,
-    private transport: Transport,
-    private worker: WorkerClient,
-    private gameView: GameView,
+    private readonly lobby: LobbyConfig,
+    private readonly eventBus: EventBus,
+    private readonly renderer: GameRenderer,
+    private readonly input: InputHandler,
+    private readonly transport: Transport,
+    private readonly worker: WorkerClient,
+    private readonly gameView: GameView,
   ) {
     this.lastMessageTime = Date.now();
-  }
-
-  private getWinner(update: WinUpdate): Winner {
-    if (update.winner[0] !== "player") return update.winner;
-    const clientId = this.gameView.playerBySmallID(update.winner[1]).clientID();
-    if (clientId === null) return;
-    return ["player", clientId];
   }
 
   private saveGame(update: WinUpdate) {
@@ -205,7 +219,6 @@ export class ClientGameRunner {
         stats: update.allPlayersStats[this.lobby.clientID],
       },
     ];
-    const winner = this.getWinner(update);
 
     if (this.lobby.gameStartInfo === undefined) {
       throw new Error("missing gameStartInfo");
@@ -216,9 +229,10 @@ export class ClientGameRunner {
       players,
       // Not saving turns locally
       [],
-      startTime(),
+      startTime() ?? 0,
       Date.now(),
-      winner,
+      update.winner,
+      this.lobby.serverConfig,
     );
     endGame(record);
   }
@@ -234,9 +248,17 @@ export class ClientGameRunner {
         1000,
       );
     }, 20000);
-    this.eventBus.on(MouseUpEvent, (e) => this.inputEvent(e));
-    this.eventBus.on(MouseMoveEvent, (e) => this.onMouseMove(e));
-    this.eventBus.on(DoBoatAttackEvent, (e) => this.doBoatAttackUnderCursor());
+    this.eventBus.on(MouseUpEvent, this.inputEvent.bind(this));
+    this.eventBus.on(MouseMoveEvent, this.onMouseMove.bind(this));
+    this.eventBus.on(AutoUpgradeEvent, this.autoUpgradeEvent.bind(this));
+    this.eventBus.on(
+      DoBoatAttackEvent,
+      this.doBoatAttackUnderCursor.bind(this),
+    );
+    this.eventBus.on(
+      DoGroundAttackEvent,
+      this.doGroundAttackUnderCursor.bind(this),
+    );
 
     this.renderer.initialize();
     this.input.initialize();
@@ -266,10 +288,12 @@ export class ClientGameRunner {
         this.saveGame(gu.updates[GameUpdateType.Win][0]);
       }
     });
-    const worker = this.worker;
+    const { worker } = this;
     const keepWorkerAlive = () => {
-      worker.sendHeartbeat();
-      requestAnimationFrame(keepWorkerAlive);
+      if (this.isActive) {
+        worker.sendHeartbeat();
+        requestAnimationFrame(keepWorkerAlive);
+      }
     };
     requestAnimationFrame(keepWorkerAlive);
 
@@ -307,7 +331,19 @@ export class ClientGameRunner {
           this.lobby.gameStartInfo.gameID,
           this.lobby.clientID,
           true,
-          translateText("error_modal.desync_notice"),
+          false,
+          "error_modal.desync_notice",
+        );
+      }
+      if (message.type === "error") {
+        showErrorModal(
+          message.error,
+          message.message,
+          this.lobby.gameID,
+          this.lobby.clientID,
+          true,
+          false,
+          "error_modal.connection_error",
         );
       }
       if (message.type === "turn") {
@@ -328,9 +364,11 @@ export class ClientGameRunner {
     this.transport.connect(onconnect, onmessage);
   }
 
-  public stop(saveFullGame: boolean = false) {
-    this.worker.cleanup();
+  public stop(saveFullGame = false) {
+    if (!this.isActive) return;
+
     this.isActive = false;
+    this.worker.cleanup();
     this.transport.leaveGame(saveFullGame);
     if (this.connectionCheckInterval) {
       clearInterval(this.connectionCheckInterval);
@@ -356,7 +394,7 @@ export class ClientGameRunner {
       !this.gameView.hasOwner(tile) &&
       this.gameView.inSpawnPhase()
     ) {
-      this.eventBus.emit(new SendSpawnIntentEvent(cell));
+      this.eventBus.emit(new SendSpawnIntentEvent(tile));
       return;
     }
     if (this.gameView.inSpawnPhase()) {
@@ -377,32 +415,87 @@ export class ClientGameRunner {
           ),
         );
       } else if (this.canBoatAttack(actions, tile)) {
-        this.sendBoatAttackIntent(tile, cell);
+        this.sendBoatAttackIntent(tile);
       }
 
       const owner = this.gameView.owner(tile);
       if (owner.isPlayer()) {
-        this.gameView.setFocusedPlayer(owner as PlayerView);
+        this.gameView.setFocusedPlayer(owner);
       } else {
         this.gameView.setFocusedPlayer(null);
       }
     });
   }
 
-  private doBoatAttackUnderCursor(): void {
-    if (!this.isActive || !this.lastMousePosition) {
+  private autoUpgradeEvent(event: AutoUpgradeEvent) {
+    if (!this.isActive) {
       return;
     }
+
     const cell = this.renderer.transformHandler.screenToWorldCoordinates(
-      this.lastMousePosition.x,
-      this.lastMousePosition.y,
+      event.x,
+      event.y,
     );
     if (!this.gameView.isValidCoord(cell.x, cell.y)) {
       return;
     }
 
     const tile = this.gameView.ref(cell.x, cell.y);
+
+    if (this.myPlayer === null) {
+      const myPlayer = this.gameView.playerByClientID(this.lobby.clientID);
+      if (myPlayer === null) return;
+      this.myPlayer = myPlayer;
+    }
+
     if (this.gameView.inSpawnPhase()) {
+      return;
+    }
+
+    this.myPlayer.actions(tile).then((actions) => {
+      const upgradeUnits: {
+        unitId: number;
+        unitType: UnitType;
+        distance: number;
+      }[] = [];
+
+      for (const bu of actions.buildableUnits) {
+        if (bu.canUpgrade !== false) {
+          const existingUnit = this.gameView
+            .units()
+            .find((unit) => unit.id() === bu.canUpgrade);
+          if (existingUnit) {
+            const distance = this.gameView.manhattanDist(
+              tile,
+              existingUnit.tile(),
+            );
+
+            upgradeUnits.push({
+              unitId: bu.canUpgrade,
+              unitType: bu.type,
+              distance,
+            });
+          }
+        }
+      }
+
+      if (upgradeUnits.length > 0) {
+        upgradeUnits.sort((a, b) => a.distance - b.distance);
+        const bestUpgrade = upgradeUnits[0];
+
+        this.eventBus.emit(
+          new SendUpgradeStructureIntentEvent(
+            bestUpgrade.unitId,
+            bestUpgrade.unitType,
+          ),
+        );
+      }
+    });
+  }
+
+  private doBoatAttackUnderCursor(): void {
+    const tile = this.getTileUnderCursor();
+    if (tile === null) {
       return;
     }
 
@@ -414,9 +507,51 @@ export class ClientGameRunner {
 
     this.myPlayer.actions(tile).then((actions) => {
       if (!actions.canAttack && this.canBoatAttack(actions, tile)) {
-        this.sendBoatAttackIntent(tile, cell);
+        this.sendBoatAttackIntent(tile);
       }
     });
+  }
+
+  private doGroundAttackUnderCursor(): void {
+    const tile = this.getTileUnderCursor();
+    if (tile === null) {
+      return;
+    }
+
+    if (this.myPlayer === null) {
+      const myPlayer = this.gameView.playerByClientID(this.lobby.clientID);
+      if (myPlayer === null) return;
+      this.myPlayer = myPlayer;
+    }
+
+    this.myPlayer.actions(tile).then((actions) => {
+      if (this.myPlayer === null) return;
+      if (actions.canAttack) {
+        this.eventBus.emit(
+          new SendAttackIntentEvent(
+            this.gameView.owner(tile).id(),
+            this.myPlayer.troops() * this.renderer.uiState.attackRatio,
+          ),
+        );
+      }
+    });
+  }
+
+  private getTileUnderCursor(): TileRef | null {
+    if (!this.isActive || !this.lastMousePosition) {
+      return null;
+    }
+    if (this.gameView.inSpawnPhase()) {
+      return null;
+    }
+    const cell = this.renderer.transformHandler.screenToWorldCoordinates(
+      this.lastMousePosition.x,
+      this.lastMousePosition.y,
+    );
+    if (!this.gameView.isValidCoord(cell.x, cell.y)) {
+      return null;
+    }
+    return this.gameView.ref(cell.x, cell.y);
   }
 
   private canBoatAttack(actions: PlayerActions, tile: TileRef): boolean {
@@ -424,7 +559,7 @@ export class ClientGameRunner {
       (bu) => bu.type === UnitType.TransportShip,
     );
     if (bu === undefined) {
-      console.warn(`no transport ship buildable units`);
+      console.warn("no transport ship buildable units");
       return false;
     }
     return (
@@ -434,26 +569,20 @@ export class ClientGameRunner {
     );
   }
 
-  private sendBoatAttackIntent(tile: TileRef, cell: Cell) {
+  private sendBoatAttackIntent(tile: TileRef) {
     if (!this.myPlayer) return;
 
-    this.myPlayer
-      .bestTransportShipSpawn(this.gameView.ref(cell.x, cell.y))
-      .then((spawn: number | false) => {
-        if (this.myPlayer === null) throw new Error("not initialized");
-        let spawnCell: Cell | null = null;
-        if (spawn !== false) {
-          spawnCell = new Cell(this.gameView.x(spawn), this.gameView.y(spawn));
-        }
-        this.eventBus.emit(
-          new SendBoatAttackIntentEvent(
-            this.gameView.owner(tile).id(),
-            cell,
-            this.myPlayer.troops() * this.renderer.uiState.attackRatio,
-            spawnCell,
-          ),
-        );
-      });
+    this.myPlayer.bestTransportShipSpawn(tile).then((spawn: number | false) => {
+      if (this.myPlayer === null) throw new Error("Not initialized");
+      this.eventBus.emit(
+        new SendBoatAttackIntentEvent(
+          this.gameView.owner(tile).id(),
+          tile,
+          this.myPlayer.troops() * this.renderer.uiState.attackRatio,
+          spawn === false ? null : spawn,
+        ),
+      );
+    });
   }
 
   private shouldBoat(tile: TileRef, src: TileRef) {
@@ -490,7 +619,7 @@ export class ClientGameRunner {
     if (this.gameView.isLand(tile)) {
       const owner = this.gameView.owner(tile);
       if (owner.isPlayer()) {
-        this.gameView.setFocusedPlayer(owner as PlayerView);
+        this.gameView.setFocusedPlayer(owner);
       } else {
         this.gameView.setFocusedPlayer(null);
       }
@@ -501,11 +630,10 @@ export class ClientGameRunner {
           UnitType.TradeShip,
           UnitType.TransportShip,
         ])
-        .sort((a, b) => a.distSquared - b.distSquared)
-        .map((u) => u.unit);
+        .sort((a, b) => a.distSquared - b.distSquared);
 
       if (units.length > 0) {
-        this.gameView.setFocusedPlayer(units[0].owner() as PlayerView);
+        this.gameView.setFocusedPlayer(units[0].unit.owner());
       } else {
         this.gameView.setFocusedPlayer(null);
       }
@@ -516,36 +644,44 @@ export class ClientGameRunner {
     if (this.transport.isLocal) {
       return;
     }
-    const timeSinceLastMessage = Date.now() - this.lastMessageTime;
+    const now = Date.now();
+    const timeSinceLastMessage = now - this.lastMessageTime;
     if (timeSinceLastMessage > 5000) {
       console.log(
         `No message from server for ${timeSinceLastMessage} ms, reconnecting`,
       );
-      this.lastMessageTime = Date.now();
+      this.lastMessageTime = now;
       this.transport.reconnect();
     }
   }
 }
 
 function showErrorModal(
-  errMsg: string,
-  stack: string,
+  error: string,
+  message: string | undefined,
   gameID: GameID,
   clientID: ClientID,
   closable = false,
-  heading = translateText("error_modal.crashed"),
+  showDiscord = true,
+  heading = "error_modal.crashed",
 ) {
-  const errorText = `Error: ${errMsg}\nStack: ${stack}`;
-
   if (document.querySelector("#error-modal")) {
     return;
   }
 
   const modal = document.createElement("div");
-
   modal.id = "error-modal";
 
-  const content = `${translateText(heading)}\n game id: ${gameID}, client id: ${clientID}\n${translateText("error_modal.paste_discord")}\n${errorText}`;
+  const content = [
+    showDiscord ? translateText("error_modal.paste_discord") : null,
+    translateText(heading),
+    `game id: ${gameID}`,
+    `client id: ${clientID}`,
+    `Error: ${error}`,
+    message ? `Message: ${message}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   // Create elements
   const pre = document.createElement("pre");
@@ -554,26 +690,25 @@ function showErrorModal(
   const button = document.createElement("button");
   button.textContent = translateText("error_modal.copy_clipboard");
   button.className = "copy-btn";
-  button.addEventListener("click", () => {
-    navigator.clipboard
-      .writeText(content)
-      .then(() => (button.textContent = translateText("error_modal.copied")))
-      .catch(
-        () => (button.textContent = translateText("error_modal.failed_copy")),
-      );
-  });
-
-  const closeButton = document.createElement("button");
-  closeButton.textContent = "X";
-  closeButton.className = "close-btn";
-  closeButton.addEventListener("click", () => {
-    modal.style.display = "none";
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      button.textContent = translateText("error_modal.copied");
+    } catch {
+      button.textContent = translateText("error_modal.failed_copy");
+    }
   });
 
   // Add to modal
   modal.appendChild(pre);
   modal.appendChild(button);
   if (closable) {
+    const closeButton = document.createElement("button");
+    closeButton.textContent = "X";
+    closeButton.className = "close-btn";
+    closeButton.addEventListener("click", () => {
+      modal.remove();
+    });
     modal.appendChild(closeButton);
   }
 

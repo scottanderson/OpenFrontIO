@@ -1,5 +1,3 @@
-# OpenFrontIO
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="resources/images/OpenFrontLogoDark.svg">
@@ -8,19 +6,26 @@
   </picture>
 </p>
 
-![Prettier Check](https://github.com/openfrontio/OpenFrontIO/actions/workflows/prettier.yml/badge.svg)
-[![Crowdin](https://badges.crowdin.net/openfront-mls/localized.svg)](https://crowdin.com/project/openfront-mls)
-
-OpenFront is an online real-time strategy game focused on territorial control and alliance building. Players compete to expand their territory, build structures, and form strategic alliances in various maps based on real-world geography.
+[OpenFront.io](https://openfront.io/) is an online real-time strategy game focused on territorial control and alliance building. Players compete to expand their territory, build structures, and form strategic alliances in various maps based on real-world geography.
 
 This is a fork/rewrite of WarFront.io. Credit to https://github.com/WarFrontIO.
 
+![CI](https://github.com/openfrontio/OpenFrontIO/actions/workflows/ci.yml/badge.svg)
+[![Crowdin](https://badges.crowdin.net/openfront-mls/localized.svg)](https://crowdin.com/project/openfront-mls)
+[![CLA assistant](https://cla-assistant.io/readme/badge/openfrontio/OpenFrontIO)](https://cla-assistant.io/openfrontio/OpenFrontIO)
+
 # OpenFront - Licensing
 
-This project uses a dual-licensing approach:
+OpenFront Contributor License Agreement (CLA) can be found [here](https://gist.github.com/evanpelle/4c9e0fc2cb73b2b3b3402ca202f56672).
+This is to help us transition to AGPL, a stricter open source license. After creating a pull request you will be prompted to sign.
+
+This project uses a multi-licensing approach:
 
 - Code in the `server/` and `core/` directory is licensed under MIT
 - Client code (in the `client/` directory) is licensed under GPL v3
+- Assets in resources/non-commercial are under CC BY-NC 4.0 with OpenFront LLC Commercial Exemption. By contributing assets to /non-commercial/, contributors agree that OpenFront LLC may use their contributions for commercial purposes while the contributions remain CC BY-NC 4.0 for all other parties.
+
+See LICENSE file for more details.
 
 ## 🌟 Features
 
@@ -134,7 +139,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 Translators are welcome! Please feel free to help translate into your language.
 How to help?
 
-1. Request to join the translation [Discord](https://discord.gg/rUukAnz4Ww)
+1. Request to join the dev [Discord](https://discord.gg/K9zernJB5z) (in the application form, say you want to help translate)
 1. Go to the project's Crowdin translation page: [https://crowdin.com/project/openfront-mls](https://crowdin.com/project/openfront-mls)
 1. Login if you already have an account/ Sign up if you don't have one
 1. Select the language you want to translate in/ If your language isn't on the list, click the "Request New Language" button and enter the language you want added there.

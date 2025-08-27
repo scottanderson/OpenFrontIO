@@ -1,23 +1,27 @@
 import { LitElement, css, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { translateText } from "../../../client/Utils";
 import { EventBus } from "../../../core/EventBus";
 import { GameUpdateType } from "../../../core/game/GameUpdates";
 import { GameView } from "../../../core/game/GameView";
-import { SendWinnerEvent } from "../../Transport";
+import { GutterAdModalEvent } from "./GutterAdModal";
 import { Layer } from "./Layer";
+import { SendWinnerEvent } from "../../Transport";
+import { translateText } from "../../../client/Utils";
 
 @customElement("win-modal")
 export class WinModal extends LitElement implements Layer {
-  public game: GameView;
-  public eventBus: EventBus;
+  public game: GameView | undefined;
+  public eventBus: EventBus | undefined;
 
   private hasShownDeathModal = false;
 
   @state()
   isVisible = false;
 
-  private _title: string;
+  @state()
+  showButtons = false;
+
+  private _title = "";
 
   // Override to prevent shadow DOM creation
   createRenderRoot() {
@@ -133,9 +137,11 @@ export class WinModal extends LitElement implements Layer {
   render() {
     return html`
       <div class="win-modal ${this.isVisible ? "visible" : ""}">
-        <h2>${this._title || ""}</h2>
+        <h2>${this._title}</h2>
         ${this.innerHtml()}
-        <div class="button-container">
+        <div
+          class="button-container ${this.showButtons ? "visible" : "hidden"}"
+        >
           <button @click=${this._handleExit}>
             ${translateText("win_modal.exit")}
           </button>
@@ -169,12 +175,21 @@ export class WinModal extends LitElement implements Layer {
   }
 
   show() {
-    this.isVisible = true;
-    this.requestUpdate();
+    this.eventBus?.emit(new GutterAdModalEvent(true));
+    setTimeout(() => {
+      this.isVisible = true;
+      this.requestUpdate();
+    }, 1500);
+    setTimeout(() => {
+      this.showButtons = true;
+      this.requestUpdate();
+    }, 3000);
   }
 
   hide() {
+    this.eventBus?.emit(new GutterAdModalEvent(false));
     this.isVisible = false;
+    this.showButtons = false;
     this.requestUpdate();
   }
 
@@ -186,6 +201,7 @@ export class WinModal extends LitElement implements Layer {
   init() {}
 
   tick() {
+    if (this.game === undefined) throw new Error("Not initialized");
     const myPlayer = this.game.myPlayer();
     if (
       !this.hasShownDeathModal &&
@@ -201,8 +217,11 @@ export class WinModal extends LitElement implements Layer {
     const updates = this.game.updatesSinceLastTick();
     const winUpdates = updates !== null ? updates[GameUpdateType.Win] : [];
     winUpdates.forEach((wu) => {
-      if (wu.winner[0] === "team") {
-        this.eventBus.emit(new SendWinnerEvent(wu.winner, wu.allPlayersStats));
+      if (this.game === undefined) return;
+      if (wu.winner === undefined) {
+        // ...
+      } else if (wu.winner[0] === "team") {
+        this.eventBus?.emit(new SendWinnerEvent(wu.winner, wu.allPlayersStats));
         if (wu.winner[1] === this.game.myPlayer()?.team()) {
           this._title = translateText("win_modal.your_team");
         } else {
@@ -212,11 +231,11 @@ export class WinModal extends LitElement implements Layer {
         }
         this.show();
       } else {
-        const winner = this.game.playerBySmallID(wu.winner[1]);
-        if (!winner.isPlayer()) return;
+        const winner = this.game.playerByClientID(wu.winner[1]);
+        if (!winner?.isPlayer()) return;
         const winnerClient = winner.clientID();
         if (winnerClient !== null) {
-          this.eventBus.emit(
+          this.eventBus?.emit(
             new SendWinnerEvent(["player", winnerClient], wu.allPlayersStats),
           );
         }

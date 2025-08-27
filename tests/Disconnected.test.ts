@@ -1,8 +1,8 @@
+import { Game, Player, PlayerInfo, PlayerType } from "../src/core/game/Game";
 import { MarkDisconnectedExecution } from "../src/core/execution/MarkDisconnectedExecution";
 import { SpawnExecution } from "../src/core/execution/SpawnExecution";
-import { Game, Player, PlayerInfo, PlayerType } from "../src/core/game/Game";
-import { setup } from "./util/Setup";
 import { executeTicks } from "./util/utils";
+import { setup } from "./util/Setup";
 
 let game: Game;
 let player1: Player;
@@ -10,13 +10,12 @@ let player2: Player;
 
 describe("Disconnected", () => {
   beforeEach(async () => {
-    game = await setup("Plains", {
+    game = await setup("plains", {
       infiniteGold: true,
       instantBuild: true,
     });
 
     const player1Info = new PlayerInfo(
-      "us",
       "Active Player",
       PlayerType.Human,
       null,
@@ -24,7 +23,6 @@ describe("Disconnected", () => {
     );
 
     const player2Info = new PlayerInfo(
-      "fr",
       "Disconnected Player",
       PlayerType.Human,
       null,

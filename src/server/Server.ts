@@ -1,8 +1,8 @@
-import cluster from "cluster";
 import * as dotenv from "dotenv";
-import { GameEnv } from "../core/configuration/Config";
-import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
 import { Cloudflare, TunnelConfig } from "./Cloudflare";
+import { GameEnv } from "../core/configuration/Config";
+import cluster from "cluster";
+import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
 import { startMaster } from "./Master";
 import { startWorker } from "./Worker";
 
@@ -36,12 +36,14 @@ async function setupTunnels() {
   const cloudflare = new Cloudflare(
     config.cloudflareAccountId(),
     config.cloudflareApiToken(),
-    config.cloudflareConfigDir(),
+    config.cloudflareConfigPath(),
+    config.cloudflareCredsPath(),
   );
 
   const domainToService = new Map<string, string>().set(
     config.subdomain(),
-    `http://localhost:3000`,
+    // TODO: change to 3000 when we have a proper tunnel setup.
+    "http://localhost:80",
   );
 
   for (let i = 0; i < config.numWorkers(); i++) {
@@ -51,11 +53,15 @@ async function setupTunnels() {
     );
   }
 
-  const tunnel = await cloudflare.createTunnel({
-    subdomain: config.subdomain(),
-    domain: config.domain(),
-    subdomainToService: domainToService,
-  } as TunnelConfig);
+  if (!(await cloudflare.configAlreadyExists())) {
+    await cloudflare.createTunnel({
+      domain: config.domain(),
+      subdomain: config.subdomain(),
+      subdomainToService: domainToService,
+    } as TunnelConfig);
+  } else {
+    console.log("Config already exists, skipping tunnel creation");
+  }
 
-  await cloudflare.startCloudflared(tunnel.configPath);
+  await cloudflare.startCloudflared();
 }

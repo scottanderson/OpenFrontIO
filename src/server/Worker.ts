@@ -1,36 +1,37 @@
-import express, { NextFunction, Request, Response } from "express";
-import rateLimit from "express-rate-limit";
-import http from "http";
-import ipAnonymize from "ip-anonymize";
-import path from "path";
-import { fileURLToPath } from "url";
-import { WebSocket, WebSocketServer } from "ws";
-import { z } from "zod/v4";
-import { GameEnv } from "../core/configuration/Config";
-import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
-import { GameType } from "../core/game/Game";
 import {
-  ClientJoinMessageSchema,
-  GameRecord,
-  GameRecordSchema,
-} from "../core/Schemas";
-import { CreateGameInputSchema, GameInputSchema } from "../core/WorkerSchemas";
+  CreateGameInputSchema,
+  GameInputSchema,
+  WorkerApiGameIdExists,
+} from "../core/WorkerSchemas";
+import { GameRecord, GameRecordSchema } from "../core/Schemas";
+import { LimiterType, gatekeeper } from "./Gatekeeper";
+import { WebSocket, WebSocketServer } from "ws";
 import { archive, readGameRecord } from "./Archive";
-import { Client } from "./Client";
+import express, { NextFunction, Request, Response } from "express";
+import { GameEnv } from "../core/configuration/Config";
 import { GameManager } from "./GameManager";
-import { gatekeeper, LimiterType } from "./Gatekeeper";
-import { getUserMe, verifyClientToken } from "./jwt";
-import { logger } from "./Logger";
+import { GameType } from "../core/game/Game";
+import { ID } from "../core/BaseSchemas";
+import { PrivilegeRefresher } from "./PrivilegeRefresher";
+import { fileURLToPath } from "url";
+import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
+import http from "http";
 import { initWorkerMetrics } from "./WorkerMetrics";
+import ipAnonymize from "ip-anonymize";
+import { logger } from "./Logger";
+import path from "path";
+import { preJoinMessageHandler } from "./worker/websocket/handler/message/PreJoinHandler";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
 
 const config = getServerConfigFromServer();
 
-const workerId = parseInt(process.env.WORKER_ID || "0");
+const workerId = parseInt(process.env.WORKER_ID ?? "0");
 const log = logger.child({ comp: `w_${workerId}` });
 
 // Worker setup
-export function startWorker() {
-  log.info(`Worker starting...`);
+export async function startWorker() {
+  log.info("Worker starting...");
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -41,9 +42,15 @@ export function startWorker() {
 
   const gm = new GameManager(config, log);
 
-  if (config.env() === GameEnv.Prod && config.otelEnabled()) {
+  if (config.otelEnabled()) {
     initWorkerMetrics(gm);
   }
+
+  const privilegeRefresher = new PrivilegeRefresher(
+    config.jwtIssuer() + "/cosmetics.json",
+    log,
+  );
+  privilegeRefresher.start();
 
   // Middleware to handle /wX path prefix
   app.use((req, res, next) => {
@@ -75,19 +82,27 @@ export function startWorker() {
   app.use(express.static(path.join(__dirname, "../../out")));
   app.use(
     rateLimit({
-      windowMs: 1000, // 1 second
       max: 20, // 20 requests per IP per second
+      windowMs: 1000, // 1 second
     }),
   );
 
   app.post(
     "/api/create_game/:id",
     gatekeeper.httpHandler(LimiterType.Post, async (req, res) => {
-      const id = req.params.id;
+      const { id } = req.params;
+      const creatorClientID = (() => {
+        if (typeof req.query.creatorClientID !== "string") return undefined;
+
+        const trimmed = req.query.creatorClientID.trim();
+        return ID.safeParse(trimmed).success ? trimmed : undefined;
+      })();
+
       if (!id) {
-        log.warn(`cannot create game, id not found`);
+        log.warn("cannot create game, id not found");
         return res.status(400).json({ error: "Game ID is required" });
       }
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
       const clientIP = req.ip || req.socket.remoteAddress || "unknown";
       const result = CreateGameInputSchema.safeParse(req.body);
       if (!result.success) {
@@ -115,10 +130,23 @@ export function startWorker() {
         return res.status(400).json({ error: "Worker, game id mismatch" });
       }
 
-      const game = gm.createGame(id, gc);
+      // Pass creatorClientID to createGame
+      const game = gm.createGame(id, gc, creatorClientID);
 
       log.info(
-        `Worker ${workerId}: IP ${ipAnonymize(clientIP)} creating game ${game.isPublic() ? "Public" : "Private"} with id ${id}`,
+        `Worker ${
+          workerId
+        }: IP ${
+          ipAnonymize(clientIP)
+        } creating ${
+          game.isPublic() ? "Public" : "Private"
+        }${
+          gc?.gameMode ? ` ${gc.gameMode}` : ""
+        } game with id ${
+          id
+        }${
+          creatorClientID ? `, creator: ${creatorClientID}` : ""
+        }`,
       );
       res.json(game.gameInfo());
     }),
@@ -134,6 +162,7 @@ export function startWorker() {
         return;
       }
       if (game.isPublic()) {
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
         const clientIP = req.ip || req.socket.remoteAddress || "unknown";
         log.info(
           `cannot start public game ${game.id}, game is public, ip: ${ipAnonymize(clientIP)}`,
@@ -165,6 +194,7 @@ export function startWorker() {
         return res.status(400).json({ error: "Game not found" });
       }
       if (game.isPublic()) {
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
         const clientIP = req.ip || req.socket.remoteAddress || "unknown";
         log.warn(
           `cannot update public game ${game.id}, ip: ${ipAnonymize(clientIP)}`,
@@ -188,7 +218,7 @@ export function startWorker() {
       const lobbyId = req.params.id;
       res.json({
         exists: gm.game(lobbyId) !== null,
-      });
+      } satisfies WorkerApiGameIdExists);
     }),
   );
 
@@ -211,9 +241,9 @@ export function startWorker() {
 
       if (!gameRecord) {
         return res.status(404).json({
-          success: false,
           error: "Game not found",
           exists: false,
+          success: false,
         });
       }
 
@@ -225,20 +255,20 @@ export function startWorker() {
           `git commit mismatch for game ${req.params.id}, expected ${config.gitCommit()}, got ${gameRecord.gitCommit}`,
         );
         return res.status(409).json({
-          success: false,
+          details: {
+            actualCommit: gameRecord.gitCommit,
+            expectedCommit: config.gitCommit(),
+          },
           error: "Version mismatch",
           exists: true,
-          details: {
-            expectedCommit: config.gitCommit(),
-            actualCommit: gameRecord.gitCommit,
-          },
+          success: false,
         });
       }
 
       return res.status(200).json({
-        success: true,
         exists: true,
-        gameRecord: gameRecord,
+        gameRecord,
+        success: true,
       });
     }),
   );
@@ -286,96 +316,19 @@ export function startWorker() {
   wss.on("connection", (ws: WebSocket, req) => {
     ws.on(
       "message",
-      gatekeeper.wsHandler(req, async (message: string) => {
-        const forwarded = req.headers["x-forwarded-for"];
-        const ip = Array.isArray(forwarded)
-          ? forwarded[0]
-          : forwarded || req.socket.remoteAddress || "unknown";
-
-        try {
-          // Parse and handle client messages
-          const parsed = ClientJoinMessageSchema.safeParse(
-            JSON.parse(message.toString()),
-          );
-          if (!parsed.success) {
-            const error = z.prettifyError(parsed.error);
-            log.warn("Error parsing join message client", error);
-            ws.close();
-            return;
-          }
-          const clientMsg = parsed.data;
-
-          if (clientMsg.type === "join") {
-            // Verify this worker should handle this game
-            const expectedWorkerId = config.workerIndex(clientMsg.gameID);
-            if (expectedWorkerId !== workerId) {
-              log.warn(
-                `Worker mismatch: Game ${clientMsg.gameID} should be on worker ${expectedWorkerId}, but this is worker ${workerId}`,
-              );
-              return;
-            }
-
-            const { persistentId, claims } = await verifyClientToken(
-              clientMsg.token,
-              config,
-            );
-
-            let roles: string[] | undefined;
-
-            // Check user roles
-            if (claims !== null) {
-              const result = await getUserMe(clientMsg.token, config);
-              if (result === false) {
-                log.warn("Token is not valid", claims);
-                return;
-              }
-              roles = result.player.roles;
-            }
-
-            // TODO: Validate client settings based on roles
-
-            // Create client and add to game
-            const client = new Client(
-              clientMsg.clientID,
-              persistentId,
-              claims,
-              roles,
-              ip,
-              clientMsg.username,
-              ws,
-              clientMsg.flag,
-            );
-
-            const wasFound = gm.addClient(
-              client,
-              clientMsg.gameID,
-              clientMsg.lastTurn,
-            );
-
-            if (!wasFound) {
-              log.info(
-                `game ${clientMsg.gameID} not found on worker ${workerId}`,
-              );
-              // Handle game not found case
-            }
-          }
-
-          // Handle other message types
-        } catch (error) {
-          log.warn(
-            `error handling websocket message for ${ipAnonymize(ip)}: ${error}`.substring(
-              0,
-              250,
-            ),
-          );
-        }
-      }),
+      gatekeeper.wsHandler(req, (message) =>
+        preJoinMessageHandler(req, ws, privilegeRefresher, gm, message),
+      ),
     );
 
     ws.on("error", (error: Error) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
       if ((error as any).code === "WS_ERR_UNEXPECTED_RSV_1") {
-        ws.close(1002);
+        ws.close(1002, "WS_ERR_UNEXPECTED_RSV_1");
       }
+    });
+    ws.on("close", () => {
+      ws.removeAllListeners();
     });
   });
 
@@ -388,9 +341,9 @@ export function startWorker() {
     if (process.send) {
       process.send({
         type: "WORKER_READY",
-        workerId: workerId,
+        workerId,
       });
-      log.info(`signaled ready state to master`);
+      log.info("signaled ready state to master");
     }
   });
 
@@ -402,10 +355,10 @@ export function startWorker() {
 
   // Process-level error handlers
   process.on("uncaughtException", (err) => {
-    log.error(`uncaught exception:`, err);
+    log.error("uncaught exception:", err);
   });
 
   process.on("unhandledRejection", (reason, promise) => {
-    log.error(`unhandled rejection at:`, promise, "reason:", reason);
+    log.error("unhandled rejection at:", promise, "reason:", reason);
   });
 }

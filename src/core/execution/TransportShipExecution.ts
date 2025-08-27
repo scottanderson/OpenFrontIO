@@ -8,36 +8,36 @@ import {
   Unit,
   UnitType,
 } from "../game/Game";
-import { TileRef } from "../game/GameMap";
-import { targetTransportTile } from "../game/TransportShipUtils";
+import { AttackExecution } from "./AttackExecution";
 import { PathFindResultType } from "../pathfinding/AStar";
 import { PathFinder } from "../pathfinding/PathFinding";
-import { AttackExecution } from "./AttackExecution";
+import { TileRef } from "../game/GameMap";
+import { targetTransportTile } from "../game/TransportShipUtils";
 
 export class TransportShipExecution implements Execution {
-  private lastMove: number;
+  private lastMove: number | undefined;
 
   // TODO: make this configurable
-  private ticksPerMove = 1;
+  private readonly ticksPerMove = 1;
 
   private active = true;
 
-  private mg: Game;
-  private target: Player | TerraNullius;
+  private mg: Game | undefined;
+  private target: Player | TerraNullius | undefined;
 
   // TODO make private
-  public path: TileRef[];
-  private dst: TileRef | null;
+  public path: TileRef[] | undefined;
+  private dst: TileRef | null = null;
 
-  private boat: Unit;
+  private boat: Unit | undefined;
 
-  private pathFinder: PathFinder;
+  private pathFinder: PathFinder | undefined;
 
   constructor(
-    private attacker: Player,
-    private targetID: PlayerID | null,
-    private ref: TileRef,
-    private troops: number,
+    private readonly attacker: Player,
+    private readonly targetID: PlayerID | null,
+    private readonly ref: TileRef,
+    private startTroops: number,
     private src: TileRef | null,
   ) {}
 
@@ -51,22 +51,31 @@ export class TransportShipExecution implements Execution {
       this.active = false;
       return;
     }
+    if (!mg.isValidRef(this.ref)) {
+      console.warn(`TransportShipExecution: ref ${this.ref} not valid`);
+      this.active = false;
+      return;
+    }
+    if (this.src !== null && !mg.isValidRef(this.src)) {
+      console.warn(`TransportShipExecution: src ${this.src} not valid`);
+      this.active = false;
+      return;
+    }
 
     this.lastMove = ticks;
     this.mg = mg;
-    this.pathFinder = PathFinder.Mini(mg, 10_000, 10);
+    this.pathFinder = PathFinder.Mini(mg, 10_000, true, 100);
 
     if (
-      this.attacker.units(UnitType.TransportShip).length >=
+      this.attacker.unitCount(UnitType.TransportShip) >=
       mg.config().boatMaxNumber()
     ) {
       mg.displayMessage(
         `No boats available, max ${mg.config().boatMaxNumber()}`,
-        MessageType.WARN,
+        MessageType.ATTACK_FAILED,
         this.attacker.id(),
       );
       this.active = false;
-      this.attacker.addTroops(this.troops);
       return;
     }
 
@@ -79,13 +88,11 @@ export class TransportShipExecution implements Execution {
       this.target = mg.player(this.targetID);
     }
 
-    if (this.troops === null) {
-      this.troops = this.mg
-        .config()
-        .boatAttackAmount(this.attacker, this.target);
-    }
+    this.startTroops ??= this.mg
+      .config()
+      .boatAttackAmount(this.attacker, this.target);
 
-    this.troops = Math.min(this.troops, this.attacker.troops());
+    this.startTroops = Math.min(this.startTroops, this.attacker.troops());
 
     this.dst = targetTransportTile(this.mg, this.ref);
     if (this.dst === null) {
@@ -101,7 +108,7 @@ export class TransportShipExecution implements Execution {
       this.dst,
     );
     if (closestTileSrc === false) {
-      console.warn(`can't build transport ship`);
+      console.warn("can't build transport ship");
       this.active = false;
       return;
     }
@@ -123,21 +130,24 @@ export class TransportShipExecution implements Execution {
     }
 
     this.boat = this.attacker.buildUnit(UnitType.TransportShip, this.src, {
-      troops: this.troops,
+      troops: this.startTroops,
     });
 
     // Notify the target player about the incoming naval invasion
     if (this.targetID && this.targetID !== mg.terraNullius().id()) {
       mg.displayIncomingUnit(
         this.boat.id(),
+        // TODO TranslateText
         `Naval invasion incoming from ${this.attacker.displayName()}`,
-        MessageType.WARN,
+        MessageType.NAVAL_INVASION_INBOUND,
         this.targetID,
       );
     }
 
     // Record stats
-    this.mg.stats().boatSendTroops(this.attacker, this.target, this.troops);
+    this.mg
+      .stats()
+      .boatSendTroops(this.attacker, this.target, this.boat.troops());
   }
 
   tick(ticks: number) {
@@ -148,6 +158,11 @@ export class TransportShipExecution implements Execution {
     if (!this.active) {
       return;
     }
+    if (this.boat === undefined) throw new Error("Not initialized");
+    if (this.lastMove === undefined) throw new Error("Not initialized");
+    if (this.mg === undefined) throw new Error("Not initialized");
+    if (this.target === undefined) throw new Error("Not initialized");
+    if (this.pathFinder === undefined) throw new Error("Not initialized");
     if (!this.boat.isActive()) {
       this.active = false;
       return;
@@ -158,6 +173,7 @@ export class TransportShipExecution implements Execution {
     this.lastMove = ticks;
 
     if (this.boat.retreating()) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       this.dst = this.src!; // src is guaranteed to be set at this point
     }
 
@@ -172,16 +188,16 @@ export class TransportShipExecution implements Execution {
           // Record stats
           this.mg
             .stats()
-            .boatArriveTroops(this.attacker, this.target, this.troops);
+            .boatArriveTroops(this.attacker, this.target, this.boat.troops());
           return;
         }
         this.attacker.conquer(this.dst);
         if (this.target.isPlayer() && this.attacker.isFriendly(this.target)) {
-          this.attacker.addTroops(this.troops);
+          this.attacker.addTroops(this.boat.troops());
         } else {
           this.mg.addExecution(
             new AttackExecution(
-              this.troops,
+              this.boat.troops(),
               this.attacker,
               this.targetID,
               this.dst,
@@ -195,17 +211,17 @@ export class TransportShipExecution implements Execution {
         // Record stats
         this.mg
           .stats()
-          .boatArriveTroops(this.attacker, this.target, this.troops);
+          .boatArriveTroops(this.attacker, this.target, this.boat.troops());
         return;
       case PathFindResultType.NextTile:
-        this.boat.move(result.tile);
+        this.boat.move(result.node);
         break;
       case PathFindResultType.Pending:
         break;
       case PathFindResultType.PathNotFound:
         // TODO: add to poisoned port list
-        console.warn(`path not found to dst`);
-        this.attacker.addTroops(this.troops);
+        console.warn("path not found to dst");
+        this.attacker.addTroops(this.boat.troops());
         this.boat.delete(false);
         this.active = false;
         return;
